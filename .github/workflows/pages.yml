@@ -1,8 +1,9 @@
-name: Deploy to GitHub Pages
+name: Test and deploy
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -20,23 +21,68 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          pip install --quiet pillow
+
       - name: Parser tests
-        run: node --test test/parser.test.mjs
+        run: npm test
+
+      - name: Build the fixture corpus
+        run: python3 tools/make_fixtures.py
+
+      - name: Serve the app
+        run: |
+          npx --yes http-server -p 8099 -c-1 --silent . &
+          npx --yes wait-on http://localhost:8099/index.html --timeout 60000
+
+      - name: App end-to-end tests
+        run: node test/app.e2e.mjs
+
+      - name: OCR accuracy benchmark
+        run: node test/ocr-bench.mjs
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: test/shots/
+          if-no-files-found: ignore
 
   deploy:
     needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/configure-pages@v5
+        with:
+          # Turn Pages on the first time this runs, so the site goes live
+          # without anyone having to visit the repository settings.
+          enablement: true
+
+      - name: Strip test-only assets from the deployed site
+        run: rm -rf test tools .github
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .
+
       - id: deployment
         uses: actions/deploy-pages@v4
