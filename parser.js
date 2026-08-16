@@ -16,8 +16,9 @@
   'use strict';
 
   // Separators that appear *inside* a number: thousands dots, commas, thin
-  // spaces, apostrophes, and the middle dot Tesseract sometimes emits for ".".
-  const SEP = "[.,\\s'’·˙]";
+  // spaces, apostrophes, and the marks Tesseract emits instead of "." when the
+  // dot sits high against a tall digit (·, ˙, °, ^).
+  const SEP = "[.,\\s'’·˙°^]";
 
   // Multipliers. Order matters: longer alternatives must be tried first.
   const UNITS = [
@@ -63,7 +64,7 @@
 
   /** Repair OCR letter/digit confusion inside otherwise-numeric tokens. */
   function repairDigits(s) {
-    return s.replace(/[0-9OoQDIlLSsBZzGb][0-9OoQDIlLSsBZzGb.,'’ ]{1,}[0-9OoQDIlLSsBZzGb]/g, (tok) => {
+    let out = s.replace(/[0-9OoQDIlLSsBZzGb][0-9OoQDIlLSsBZzGb.,'’ ]{1,}[0-9OoQDIlLSsBZzGb]/g, (tok) => {
       const digits = (tok.match(/[0-9]/g) || []).length;
       const letters = (tok.match(/[A-Za-z]/g) || []).length;
       if (digits === 0 || letters === 0) return tok;
@@ -72,6 +73,54 @@
       if (!/^[0-9]|^.[0-9]/.test(tok)) return tok;
       return tok.replace(/[A-Za-z]/g, (c) => DIGIT_FIX[c] || c);
     });
+
+    // A short run of digit-lookalike letters glued to a price unit is a price
+    // with no surviving digits at all: hand-lettered "15k" comes back as "ISK".
+    out = out.replace(/\b[OoQDIlLSsBZzGb]{1,5}(?=\s?(?:k|tr|đ|₫)(?![a-zÀ-ỹ]))/gi, (tok) =>
+      tok.replace(/[A-Za-z]/g, (c) => DIGIT_FIX[c] || DIGIT_FIX[c.toUpperCase()] || c)
+    );
+
+    // Marker strokes turn 7 into # or +.
+    out = out.replace(/[#+](?=\d)|(?<=\d)[#+]/g, '7');
+    return out;
+  }
+
+  /**
+   * Vietnamese prices are written in thousands, so the tail of a real one is
+   * almost always zeros. Hand-lettered zeros are the glyph Tesseract fails on
+   * most (0 comes back as 6, 8 or 9), which turns 50.000 into 56.666.
+   *
+   * When one non-zero 0-lookalike digit fills the tail of a number, this
+   * returns the zeroed reading so the caller can offer it alongside the literal
+   * one — never instead of it, because 99.999 is a real (if unusual) price.
+   */
+  function snapZeroTail(digits) {
+    if (!/^\d+$/.test(digits) || digits.length < 5) return null;
+    const tail = digits.slice(-4);
+    const counts = {};
+    for (const c of tail) counts[c] = (counts[c] || 0) + 1;
+
+    let d = null;
+    for (const k of Object.keys(counts)) {
+      if (counts[k] >= 3 && k !== '0' && '689'.indexOf(k) !== -1) d = k;
+    }
+    if (!d) return null;
+
+    let i = digits.length - 4;
+    while (i > 0 && digits[i - 1] === d) i--;
+    if (i < 1) return null; // must keep at least one significant digit
+
+    const snapped = digits.slice(0, i) + digits.slice(i).split(d).join('0');
+    return snapped === digits ? null : snapped;
+  }
+
+  /**
+   * "$" and "§" are what a hand-drawn 5 or 8 usually degrades into, and the two
+   * readings are genuinely ambiguous, so both are offered.
+   */
+  function glyphVariants(line) {
+    if (!/[$§](?=\d)/.test(line)) return [line];
+    return [line.replace(/[$§](?=\d)/g, '5'), line.replace(/[$§](?=\d)/g, '8')];
   }
 
   /**
@@ -85,26 +134,32 @@
     if (!groups.length) return null;
     if (groups.some((g) => !/^\d+$/.test(g))) return null;
 
-    const totalDigits = groups.join('').length;
+    const digits = groups.join('');
+    const totalDigits = digits.length;
     if (totalDigits > 12) return null;
-    // Leading zero on a long run is a phone/serial number, not money.
-    if (groups[0][0] === '0' && groups[0].length > 1 && totalDigits >= 7) return null;
+    // A leading zero means a phone number, a serial, or a clock reading —
+    // nobody writes a price as "0800".
+    if (groups[0][0] === '0' && groups[0].length > 1) return null;
 
     if (groups.length === 1) {
-      return { value: parseInt(groups[0], 10), grouped: false, decimals: 0 };
+      return { value: parseInt(groups[0], 10), grouped: false, decimals: 0, digits };
     }
 
     const tail = groups.slice(1);
     if (tail.every((g) => g.length === 3)) {
       // Classic Vietnamese thousands grouping: 1.250.000
-      return { value: parseInt(groups.join(''), 10), grouped: true, decimals: 0 };
+      return { value: parseInt(digits, 10), grouped: true, decimals: 0, digits };
     }
     if (groups.length === 2 && tail[0].length <= 2) {
       // Decimal: "1,5" triệu / "35.5"
-      return { value: parseFloat(groups[0] + '.' + tail[0]), grouped: false, decimals: tail[0].length };
+      return { value: parseFloat(groups[0] + '.' + tail[0]), grouped: false, decimals: tail[0].length, digits };
     }
-    // Mixed grouping, e.g. "1.250.00" — trust the digits, drop the structure.
-    return { value: parseInt(groups.join(''), 10), grouped: true, decimals: 0 };
+    // Three or more groups that are not all thousands is a date, a version
+    // number or a serial — "16 08 2026" is not sixteen million.
+    if (groups.length > 2) return null;
+    // Two groups with an odd tail, e.g. "1.2500" — trust the digits, drop the
+    // structure.
+    return { value: parseInt(digits, 10), grouped: true, decimals: 0, digits };
   }
 
   function matchUnit(after) {
@@ -122,9 +177,16 @@
    * thousands, which is how most Vietnamese menus and market stalls write prices.
    */
   function extractFromLine(line, options) {
+    const out = [];
+    for (const variant of glyphVariants(String(line == null ? '' : line))) {
+      scanVariant(variant, options, out);
+    }
+    return out;
+  }
+
+  function scanVariant(line, options, out) {
     const opts = Object.assign({ assumeThousands: true }, options || {});
     const src = maskNonPrices(repairDigits(normalize(line)));
-    const out = [];
 
     const numRe = new RegExp('\\d(?:' + SEP + '?\\d)*', 'g');
     let m;
@@ -190,23 +252,47 @@
       value_vnd = Math.round(value_vnd);
       if (value_vnd < MIN_VND || value_vnd > MAX_VND) continue;
 
+      // An unmarked number — no grouping, no unit, no ₫ — has nothing to say
+      // for itself, so it has to at least look like money. Every price in
+      // circulation is a multiple of 500; a clock reading like "2200" is not.
+      const bare = !num.grouped && !unitKind && !explicitCurrency;
+      if (bare && !assumed && value_vnd % 500 !== 0) continue;
+
+      const matched = src.slice(start, end).trim();
+      const base = {
+        matched,
+        grouped: num.grouped,
+        unit: unitKind,
+        currency: explicitCurrency,
+        assumed,
+      };
+
       let score = 0;
       if (num.grouped) score += 3;
       if (unitKind) score += 3;
       if (explicitCurrency) score += 2;
       if (value_vnd >= 5000 && value_vnd <= 2e6) score += 1;
       if (assumed) score -= 2;
+      if (value_vnd % 1000 === 0) score += 0.5;
 
-      out.push({
-        vnd: value_vnd,
-        text: line.slice(0, 0) || raw, // raw digits as seen
-        matched: src.slice(start, end).trim(),
-        grouped: num.grouped,
-        unit: unitKind,
-        currency: explicitCurrency,
-        assumed,
-        score,
-      });
+      out.push(Object.assign({ vnd: value_vnd, raw, score, repaired: false }, base));
+
+      // Offer the zeroed reading of a mangled tail as a sibling candidate.
+      const snapped = num.digits && mult === 1 && !assumed ? snapZeroTail(num.digits) : null;
+      if (snapped) {
+        const snappedValue = parseInt(snapped, 10);
+        if (snappedValue >= MIN_VND && snappedValue <= MAX_VND && snappedValue !== value_vnd) {
+          // Only worth more than the literal reading when the literal one is
+          // not a shape any price actually takes.
+          const literalPlausible = value_vnd % 500 === 0;
+          out.push(Object.assign({
+            vnd: snappedValue,
+            raw,
+            score: score + (literalPlausible ? -1.5 : 1.5),
+            repaired: true,
+          }, base));
+        }
+      }
 
       numRe.lastIndex = end;
     }
@@ -224,15 +310,39 @@
     return all;
   }
 
-  /** Collapse duplicates and rank best-first. */
+  /**
+   * Collapse duplicates and rank best-first.
+   *
+   * Scores are bucketed to half-points before sorting so that tiny confidence
+   * wobble cannot reorder genuinely equivalent readings — a menu column of
+   * equally-sized prices then falls back to reading order, which is what a
+   * person expects, instead of shuffling between scans.
+   */
   function rank(candidates) {
     const byValue = new Map();
     for (const c of candidates) {
       const prev = byValue.get(c.vnd);
-      if (!prev || c.score > prev.score) byValue.set(c.vnd, c);
-      else if (prev) prev.score += 0.25; // repeated sightings are reassuring
+      if (!prev) {
+        byValue.set(c.vnd, Object.assign({ hits: 1, order: 0 }, c));
+      } else {
+        prev.hits++;
+        prev.order = Math.min(prev.order, c.order || 0);
+        if (c.score > prev.score) {
+          const keep = { hits: prev.hits, order: prev.order };
+          Object.assign(prev, c, keep);
+        }
+      }
     }
-    return [...byValue.values()].sort((a, b) => b.score - a.score || b.vnd - a.vnd);
+    const out = [...byValue.values()];
+    // Seeing the same number in more than one pass is real evidence.
+    for (const c of out) c.score += Math.min(2.5, (c.hits - 1) * 0.7);
+    return out.sort((a, b) => {
+      const sa = Math.round(a.score * 2);
+      const sb = Math.round(b.score * 2);
+      if (sa !== sb) return sb - sa;
+      if ((a.order || 0) !== (b.order || 0)) return (a.order || 0) - (b.order || 0);
+      return b.vnd - a.vnd;
+    });
   }
 
   function formatVnd(v) {
@@ -253,6 +363,8 @@
     normalize,
     maskNonPrices,
     repairDigits,
+    snapZeroTail,
+    glyphVariants,
     readNumber,
     extractFromLine,
     extract,

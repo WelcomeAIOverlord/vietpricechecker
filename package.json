@@ -1,0 +1,19 @@
+{
+  "name": "vietpricechecker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline PWA that reads Vietnamese prices with the camera and converts them to New Taiwan dollars.",
+  "license": "MIT",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/parser.test.mjs",
+    "fixtures": "python3 tools/make_fixtures.py",
+    "serve": "npx --yes http-server -p 8099 -c-1 .",
+    "bench": "node test/ocr-bench.mjs",
+    "e2e": "node test/app.e2e.mjs",
+    "test:all": "npm test && npm run e2e && npm run bench"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
+  }
+}

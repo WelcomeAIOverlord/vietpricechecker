@@ -8,7 +8,7 @@
  */
 
 const SHELL = 'vpc-shell-v1';
-const ENGINE = 'vpc-engine-v1';
+const ENGINE = 'vpc-engine-v2';
 
 const SHELL_ASSETS = [
   './',

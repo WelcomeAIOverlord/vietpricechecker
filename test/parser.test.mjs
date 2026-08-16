@@ -119,6 +119,48 @@ test('range guards', () => {
   assert.equal(best('999.999.999.999'), null);
 });
 
+test('mangled zero tails are offered zeroed', () => {
+  // Hand-lettered zeros come back from Tesseract as 6, 8 or 9.
+  assert.equal(best("56'666"), 50000);
+  assert.equal(best('126°666'), 120000);
+  assert.equal(best('36°666'), 30000);
+  assert.equal(best('#6 666'), 70000);
+  // The literal reading is kept as an alternative, never thrown away.
+  assert.ok(all("56'666").includes(56666));
+});
+
+test('a number that is all one digit is left alone', () => {
+  // 99.999 and 66.666 are odd but real; only mixed numbers get zeroed.
+  assert.equal(best('99.999'), 99999);
+  assert.equal(best('66.666'), 66666);
+  assert.equal(VPC.snapZeroTail('99999'), null);
+  assert.equal(VPC.snapZeroTail('56666'), '50000');
+});
+
+test('digit-lookalike letters glued to a unit', () => {
+  assert.equal(best('ISK'), 15000); // "15k" in marker pen
+  assert.equal(best('lOOk'), 100000);
+});
+
+test('ambiguous $ is read as both 5 and 8', () => {
+  const v = all('$5,000 VND');
+  assert.ok(v.includes(85000), 'expected the 8 reading');
+  assert.ok(v.includes(55000), 'expected the 5 reading');
+});
+
+test('unmarked numbers must look like money', () => {
+  assert.equal(best('2200'), null, 'a clock reading is not 2.200 đ');
+  assert.equal(best('0800'), null, 'leading zero is never a price');
+  assert.equal(best('15000'), 15000, 'a round unmarked number is fine');
+});
+
+test('space-separated dates are not millions', () => {
+  assert.equal(best('16 08 2026'), null);
+  assert.equal(best('Han dung 16 08 2026'), null);
+  // but a genuine three-group price still reads
+  assert.equal(best('1 250 000'), 1250000);
+});
+
 test('formatting', () => {
   assert.match(VPC.formatVnd(120000), /120[.,\s]000\s*₫/);
   assert.equal(VPC.formatTwd(146.5), 'NT$147');

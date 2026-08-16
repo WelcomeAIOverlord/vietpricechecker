@@ -9,7 +9,7 @@
   const VERSION = '1.0.0';
   const RATE_KEY = 'vpc.rate';
   const OPTS_KEY = 'vpc.opts';
-  const ENGINE_CACHE = 'vpc-engine-v1';
+  const ENGINE_CACHE = 'vpc-engine-v2';
 
   const CORE_SIMD = 'vendor/tesseract/tesseract-core-simd-lstm.wasm.js';
   const CORE_PLAIN = 'vendor/tesseract/tesseract-core-lstm.wasm.js';
@@ -37,6 +37,11 @@
     packStatus: $('packStatus'), packBtn: $('packBtn'), version: $('version'),
     toast: $('toast'),
   };
+
+  // Hooks the browser tests read. Harmless in production: a boolean and the
+  // last scan result, nothing that changes behaviour.
+  window.__vpcReady = false;
+  window.__vpcLast = null;
 
   const state = {
     stream: null,
@@ -284,23 +289,12 @@
         },
       });
       state.worker = worker;
-      await applyOcrParams(worker);
       return worker;
     })().catch((err) => {
       state.workerReady = null;
       throw err;
     });
     return state.workerReady;
-  }
-
-  async function applyOcrParams(worker) {
-    const params = {
-      tessedit_pageseg_mode: state.opts.digits ? '11' : '6',
-      preserve_interword_spaces: '1',
-      user_defined_dpi: '300',
-    };
-    params.tessedit_char_whitelist = state.opts.digits ? DIGIT_WHITELIST : '';
-    await worker.setParameters(params);
   }
 
   /* ------------------------------------------------------------------ *
@@ -377,6 +371,9 @@
    * Draw a source region onto a canvas at a size Tesseract likes, then flatten
    * it to high-contrast greyscale. Light-on-dark signage gets inverted, because
    * Tesseract is trained on dark text over a light page.
+   *
+   * Returns { canvas, grey, w, h, inverted } — `grey` is reused by the
+   * binarised variant so the pixels are only walked once.
    */
   function prepareCanvas(source, sw0, sh0, crop) {
     const sx = crop ? crop.sx : 0;
@@ -384,7 +381,7 @@
     const sw = crop ? crop.sw : sw0;
     const sh = crop ? crop.sh : sh0;
 
-    const TARGET = 1500;
+    const TARGET = 1600;
     const scale = Math.max(1, Math.min(3, TARGET / sw));
     const w = Math.round(sw * scale);
     const h = Math.round(sh * scale);
@@ -399,8 +396,9 @@
 
     const img = ctx.getImageData(0, 0, w, h);
     const px = img.data;
+    const total = w * h;
     const hist = new Uint32Array(256);
-    const grey = new Uint8ClampedArray(w * h);
+    const grey = new Uint8ClampedArray(total);
 
     for (let i = 0, p = 0; i < px.length; i += 4, p++) {
       const g = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
@@ -409,27 +407,84 @@
     }
 
     // Contrast stretch between the 2nd and 98th percentile.
-    const total = w * h;
     let lo = 0, hi = 255, acc = 0;
     for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > total * 0.02) { lo = v; break; } }
     acc = 0;
     for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > total * 0.02) { hi = v; break; } }
     if (hi - lo < 24) { lo = 0; hi = 255; }
 
-    let sum = 0;
-    for (let v = 0; v < 256; v++) sum += v * hist[v];
-    const invert = sum / total < 110;
+    // Text is the minority of the pixels, so compare the ink against the paper:
+    // if the darker tail is smaller than the lighter one the sign is inverted.
+    let darkCount = 0;
+    const mid = (lo + hi) / 2;
+    for (let v = 0; v < 256; v++) if (v < mid) darkCount += hist[v];
+    const inverted = darkCount > total * 0.55;
 
     const range = hi - lo;
     for (let p = 0, i = 0; p < total; p++, i += 4) {
       let g = ((grey[p] - lo) * 255) / range;
       g = g < 0 ? 0 : g > 255 ? 255 : g;
-      if (invert) g = 255 - g;
+      if (inverted) g = 255 - g;
+      grey[p] = g;
       px[i] = px[i + 1] = px[i + 2] = g;
       px[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
+    return { canvas, grey, w, h, inverted };
+  }
+
+  /**
+   * Otsu threshold. Flattening a marker-on-cardboard photo to pure black and
+   * white removes the paper texture that otherwise breaks up thick strokes,
+   * and it is the single biggest win on hand-lettered signs.
+   */
+  function binarize(prep) {
+    const { grey, w, h } = prep;
+    const total = w * h;
+    const hist = new Uint32Array(256);
+    for (let p = 0; p < total; p++) hist[grey[p]]++;
+
+    let sum = 0;
+    for (let v = 0; v < 256; v++) sum += v * hist[v];
+    let sumB = 0, wB = 0, best = 0, thr = 128;
+    for (let v = 0; v < 256; v++) {
+      wB += hist[v];
+      if (!wB) continue;
+      const wF = total - wB;
+      if (!wF) break;
+      sumB += v * hist[v];
+      const mB = sumB / wB;
+      const mF = (sum - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > best) { best = between; thr = v; }
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const img = ctx.createImageData(w, h);
+    const px = img.data;
+    for (let p = 0, i = 0; p < total; p++, i += 4) {
+      const v = grey[p] > thr ? 255 : 0;
+      px[i] = px[i + 1] = px[i + 2] = v;
+      px[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
     return canvas;
+  }
+
+  /** Pad the image with white so Tesseract does not clip glyphs at the edge. */
+  function withMargin(canvas, margin) {
+    const m = margin || 24;
+    const out = document.createElement('canvas');
+    out.width = canvas.width + m * 2;
+    out.height = canvas.height + m * 2;
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(canvas, m, m);
+    return out;
   }
 
   function flattenLines(data) {
@@ -449,36 +504,101 @@
 
   let lastResults = null;
 
-  async function scanCanvas(canvas) {
-    const worker = await initWorker();
-    setStatus('Reading…');
-    const { data } = await worker.recognize(canvas, {}, { blocks: true, text: true });
+  /**
+   * The passes, cheapest first. A clean printed tag is solved by the first one
+   * in a fraction of a second; the rest only run when that comes back empty or
+   * unconvincing, which is the usual story for handwriting and bad light.
+   */
+  const PASSES = [
+    { id: 'grey-block', variant: 'grey', psm: '6' },
+    { id: 'bw-block', variant: 'bw', psm: '6' },
+    { id: 'bw-sparse', variant: 'bw', psm: '11' },
+    { id: 'grey-sparse', variant: 'grey', psm: '11' },
+    { id: 'bw-line-digits', variant: 'bw', psm: '7', whitelist: DIGIT_WHITELIST },
+  ];
 
+  // A candidate this strong means the structure of the number itself is
+  // convincing (grouped thousands, or a k/triệu/₫ marker), so stop early.
+  const CONFIDENT = 6;
+
+  function collectCandidates(data, pass, out) {
     const lines = flattenLines(data);
     const heights = lines.map((l) => (l.bbox ? l.bbox.y1 - l.bbox.y0 : 0));
     const maxH = Math.max(1, ...heights);
 
-    const candidates = [];
     lines.forEach((line, i) => {
       const text = (line.text || '').trim();
       if (!text) return;
       const found = VPC.extractFromLine(text, { assumeThousands: state.opts.thousands });
       for (const c of found) {
         const conf = typeof line.confidence === 'number' ? line.confidence : 60;
-        // Prominent, confidently-read text is far more likely to be the price.
-        c.score += (conf - 62) / 18;
-        c.score += (heights[i] / maxH) * 2;
+        // Big, confidently-read text is far more likely to be the price.
+        c.score += (conf - 62) / 30;
+        c.score += Math.pow(heights[i] / maxH, 2) * 3;
+        c.order = i;
+        c.pass = pass.id;
         c.source = text;
-        candidates.push(c);
+        out.push(c);
       }
     });
-
-    return { ranked: VPC.rank(candidates), text: data.text || '' };
   }
 
-  async function runScan(getCanvas) {
-    if (state.busy) return;
-    if (!(await ensurePack(true))) return;
+  async function scanImage(prep, mode) {
+    const worker = await initWorker();
+    const variants = {
+      grey: () => withMargin(prep.canvas),
+      bw: () => withMargin(binarize(prep)),
+    };
+    const built = {};
+    const candidates = [];
+    const texts = [];
+    const passesRun = [];
+    const deep = mode === 'file';
+
+    // "Numbers-only OCR" is a user override: run just that, and nothing else.
+    // Live mode stays on the two cheapest passes so the preview keeps up.
+    const plan = state.opts.digits
+      ? [{ id: 'digits-only', variant: 'bw', psm: '11', whitelist: DIGIT_WHITELIST }]
+      : mode === 'live' ? PASSES.slice(0, 2) : PASSES;
+
+    for (let i = 0; i < plan.length; i++) {
+      const pass = plan[i];
+      if (i > 0) setStatus('Looking harder… (' + (i + 1) + '/' + plan.length + ')');
+      if (!built[pass.variant]) built[pass.variant] = variants[pass.variant]();
+
+      await worker.setParameters({
+        tessedit_pageseg_mode: pass.psm,
+        tessedit_char_whitelist: pass.whitelist || '',
+        preserve_interword_spaces: '1',
+        user_defined_dpi: '300',
+      });
+
+      let data;
+      try {
+        ({ data } = await worker.recognize(built[pass.variant], {}, { blocks: true, text: true }));
+      } catch (err) {
+        console.warn('pass ' + pass.id + ' failed', err);
+        continue;
+      }
+      passesRun.push(pass.id);
+      if (data.text && data.text.trim()) texts.push(data.text.trim());
+      collectCandidates(data, pass, candidates);
+
+      const ranked = VPC.rank(candidates.slice());
+      const goodEnough = ranked.length && ranked[0].score >= CONFIDENT && !ranked[0].assumed;
+      if (!deep && goodEnough) break;
+    }
+
+    return {
+      ranked: VPC.rank(candidates),
+      text: texts.join('\n'),
+      passes: passesRun,
+    };
+  }
+
+  async function runScan(getPrep, mode) {
+    if (state.busy) return null;
+    if (!(await ensurePack(true))) return null;
 
     state.busy = true;
     el.shutter.disabled = true;
@@ -486,13 +606,18 @@
     const started = Date.now();
 
     try {
-      const canvas = await getCanvas();
-      const result = await scanCanvas(canvas);
+      const prep = await getPrep();
+      const result = await scanImage(prep, mode);
+      result.ms = Date.now() - started;
       lastResults = result;
-      renderResults(result, Date.now() - started);
+      window.__vpcLast = { ranked: result.ranked, text: result.text, passes: result.passes, ms: result.ms };
+      renderResults(result, result.ms);
+      return result;
     } catch (err) {
       console.error(err);
       setStatus('Scan failed: ' + (err && err.message ? err.message : err), true);
+      window.__vpcLast = { ranked: [], text: '', passes: [], error: String(err && err.message) };
+      return null;
     } finally {
       state.busy = false;
       el.shutter.disabled = false;
@@ -515,21 +640,22 @@
     el.shotFlash.classList.remove('on');
     void el.shotFlash.offsetWidth;
     el.shotFlash.classList.add('on');
-    runScan(async () => captureFromVideo());
+    runScan(async () => captureFromVideo(), 'tap');
   }
 
   function scanFile(file) {
+    // A picked photo was framed deliberately and there is no live preview to
+    // keep responsive, so it always gets the full multi-pass treatment.
     runScan(() => new Promise((resolve, reject) => {
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
         URL.revokeObjectURL(url);
-        // A picked photo is already framed by the user, so read the whole thing.
         resolve(prepareCanvas(img, img.naturalWidth, img.naturalHeight, null));
       };
       img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('could not open that image')); };
       img.src = url;
-    }));
+    }), 'file');
   }
 
   /* ------------------------------------------------------------------ *
@@ -544,7 +670,7 @@
     if (!ranked.length) {
       el.hero.hidden = true;
       el.more.innerHTML = '';
-      setStatus('No price found. Fill the box with the number and try again.', true);
+      setStatus('No price found. Fill the box with the number, hold steady, and try again.', true);
       return;
     }
 
@@ -574,7 +700,8 @@
     }
 
     const extra = ranked.length > 1 ? ' · ' + (ranked.length - 1) + ' more' : '';
-    setStatus('Read in ' + (ms / 1000).toFixed(1) + 's' + extra);
+    const hard = result.passes && result.passes.length > 1 ? ' · ' + result.passes.length + ' passes' : '';
+    setStatus('Read in ' + (ms / 1000).toFixed(1) + 's' + extra + hard);
   }
 
   function addFlag(text) {
@@ -607,7 +734,7 @@
   async function liveTick() {
     if (!state.live) return;
     if (state.stream && !state.busy && document.visibilityState === 'visible') {
-      await runScan(async () => captureFromVideo());
+      await runScan(async () => captureFromVideo(), 'live');
     }
     if (state.live) state.liveTimer = setTimeout(liveTick, 900);
   }
@@ -779,12 +906,14 @@
     if (ready) {
       setStatus(state.stream ? 'Point at a price and tap the button.' : 'Ready — scan a saved photo.');
       // Warm the OCR engine so the first real scan is not the slow one.
-      initWorker().catch(() => {});
+      await initWorker().catch(() => {});
+      window.__vpcReady = true;
     } else if (navigator.onLine) {
       setStatus('Saving the offline scanner…');
       if (await downloadPack(true)) {
         setStatus('Ready — and it works offline from now on.');
-        initWorker().catch(() => {});
+        await initWorker().catch(() => {});
+        window.__vpcReady = true;
       }
     } else {
       setStatus('Offline scanner not saved yet — connect once to finish setup.', true);

@@ -77,6 +77,9 @@ input { -webkit-user-select: text; user-select: text; }
   color: var(--text);
   font-size: 17px;
   line-height: 1;
+  display: grid;
+  place-items: center;
+  padding: 0;
 }
 
 /* ---------- camera stage ---------- */
@@ -185,6 +188,8 @@ input { -webkit-user-select: text; user-select: text; }
 }
 
 .round-btn {
+  display: grid;
+  place-items: center;
   width: 46px; height: 46px;
   border-radius: 50%;
   border: 1px solid var(--line);
@@ -344,7 +349,12 @@ input { -webkit-user-select: text; user-select: text; }
 .row small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 3px; }
 .row-value { color: var(--muted); font-size: 13px; text-align: right; }
 .row-actions { display: flex; margin-left: auto; }
-.row-toggle input { width: 42px; height: 26px; flex: none; }
+.row-toggle input {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  accent-color: var(--teal);
+}
 
 .rate-edit { display: flex; align-items: center; gap: 8px; }
 .rate-edit-label { color: var(--muted); font-size: 13px; }
@@ -367,7 +377,7 @@ input { -webkit-user-select: text; user-select: text; }
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--safe-b) + 22px);
+  top: calc(var(--safe-t) + 62px);
   transform: translateX(-50%);
   z-index: 30;
   background: rgba(8, 14, 28, 0.95);
