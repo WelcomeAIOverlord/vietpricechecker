@@ -53,6 +53,9 @@ jobs:
       - name: App end-to-end tests
         run: node test/app.e2e.mjs
 
+      - name: Deploy and update tests
+        run: node test/update.e2e.mjs
+
       - name: OCR accuracy benchmark
         run: node test/ocr-bench.mjs
 
@@ -79,6 +82,18 @@ jobs:
           # Turn Pages on the first time this runs, so the site goes live
           # without anyone having to visit the repository settings.
           enablement: true
+
+      - name: Stamp the build id into the service worker
+        # Without this the shell cache name never changes, so a deploy that
+        # touched only app.js would never reach anyone who already installed
+        # the app.
+        run: |
+          sed -i "s/__BUILD__/${GITHUB_SHA::12}/" sw.js
+          if grep -q "__BUILD__" sw.js; then
+            echo "build id was not substituted into sw.js"
+            exit 1
+          fi
+          grep "const BUILD" sw.js
 
       - name: Strip test-only assets from the deployed site
         run: rm -rf test tools .github

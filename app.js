@@ -43,6 +43,8 @@
   window.__vpcReady = false;
   window.__vpcLast = null;
 
+  let hadController = false;
+
   const state = {
     stream: null,
     worker: null,
@@ -67,6 +69,11 @@
     el.toast.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { el.toast.hidden = true; }, ms || 2600);
+  }
+
+  function setReadyStatus(msg) {
+    if (msg) return setStatus(msg);
+    setStatus(state.stream ? 'Point at a price and tap the button.' : 'Ready — scan a saved photo.');
   }
 
   function setStatus(msg, isError) {
@@ -191,9 +198,10 @@
 
   function wasmSimdSupported() {
     try {
+      // Canonical wasm-feature-detect module: (func () (i32.const 0) (i8x16.splat) (drop))
       return WebAssembly.validate(new Uint8Array([
-        0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0,
-        10, 10, 1, 8, 0, 65, 0, 253, 15, 26, 11,
+        0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0,
+        10, 9, 1, 7, 0, 65, 0, 253, 15, 26, 11,
       ]));
     } catch (e) {
       return false;
@@ -220,11 +228,23 @@
   async function downloadPack(loud) {
     if (!('caches' in window)) {
       state.packReady = true;
-      el.packStatus.textContent = 'not supported on this browser';
-      return false;
+      state.noStorage = true;
+      el.packStatus.textContent = 'not supported — online only';
+      return true;
     }
     el.packBtn.disabled = true;
-    const cache = await caches.open(ENGINE_CACHE);
+    let cache;
+    try {
+      cache = await caches.open(ENGINE_CACHE);
+    } catch (err) {
+      // Storage can be denied outright. Stay usable, just not offline.
+      state.packReady = true;
+      state.noStorage = true;
+      el.packBtn.disabled = false;
+      el.packStatus.textContent = 'storage blocked — online only';
+      if (loud) setStatus('This browser will not let the app save anything, so it needs a connection each time.', true);
+      return true;
+    }
     const paths = enginePaths();
     let done = 0;
 
@@ -381,10 +401,13 @@
     const sw = crop ? crop.sw : sw0;
     const sh = crop ? crop.sh : sh0;
 
+    // Scale toward a working size in *both* directions. A 4032px phone photo
+    // has to come down — at full size it costs seconds per pass and hundreds of
+    // megabytes of canvas, which is how Safari decides to kill the tab.
     const TARGET = 1600;
-    const scale = Math.max(1, Math.min(3, TARGET / sw));
-    const w = Math.round(sw * scale);
-    const h = Math.round(sh * scale);
+    const scale = Math.min(3, TARGET / Math.max(sw, sh * 0.75));
+    const w = Math.max(16, Math.round(sw * scale));
+    const h = Math.max(16, Math.round(sh * scale));
 
     const canvas = document.createElement('canvas');
     canvas.width = w;
@@ -547,7 +570,12 @@
     const worker = await initWorker();
     const variants = {
       grey: () => withMargin(prep.canvas),
-      bw: () => withMargin(binarize(prep)),
+      bw: () => {
+        const bw = binarize(prep);
+        const padded = withMargin(bw);
+        releaseCanvas(bw);
+        return padded;
+      },
     };
     const built = {};
     const candidates = [];
@@ -589,6 +617,12 @@
       if (!deep && goodEnough) break;
     }
 
+    // Safari holds on to canvas backing stores far longer than the JS objects
+    // that reference them; live mode would otherwise stack up a fresh pair of
+    // multi-megapixel buffers every second. Zeroing the dimensions frees them now.
+    releaseCanvas(prep.canvas);
+    for (const key of Object.keys(built)) releaseCanvas(built[key]);
+
     return {
       ranked: VPC.rank(candidates),
       text: texts.join('\n'),
@@ -596,9 +630,14 @@
     };
   }
 
+  function releaseCanvas(canvas) {
+    if (!canvas) return;
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+
   async function runScan(getPrep, mode) {
     if (state.busy) return null;
-    if (!(await ensurePack(true))) return null;
 
     state.busy = true;
     el.shutter.disabled = true;
@@ -606,6 +645,7 @@
     const started = Date.now();
 
     try {
+      if (!(await ensurePack(true))) return null;
       const prep = await getPrep();
       const result = await scanImage(prep, mode);
       result.ms = Date.now() - started;
@@ -830,10 +870,10 @@
       saveOpts();
       rerenderLast();
     });
-    el.optDigits.addEventListener('change', async () => {
+    el.optDigits.addEventListener('change', () => {
+      // Each scan pass sets its own parameters, so there is nothing to apply here.
       state.opts.digits = el.optDigits.checked;
       saveOpts();
-      if (state.worker) await applyOcrParams(state.worker);
     });
     el.optRaw.addEventListener('change', () => {
       state.opts.raw = el.optRaw.checked;
@@ -851,11 +891,46 @@
     window.addEventListener('offline', () => { el.netChip.hidden = false; });
 
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden' && state.live) setLive(false);
+      if (document.visibilityState === 'hidden') {
+        if (state.live) setLive(false);
+        stopCamera();
+      } else if (!state.stream && !el.camGate.classList.contains('show')) {
+        startCamera();
+      }
     });
+    window.addEventListener('pagehide', stopCamera);
+
+    keepInputAboveKeyboard();
 
     // Re-render the "x minutes ago" label without a full reload.
     setInterval(renderRate, 60000);
+  }
+
+  /**
+   * The page is a fixed 100dvh with overflow hidden, so when iOS raises the
+   * keyboard it covers the bottom sheet and nothing can be scrolled to reach
+   * the field being typed into. visualViewport reports how much was taken, and
+   * lifting the sheet by that much puts the field back on screen.
+   */
+  function keepInputAboveKeyboard() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+
+    const apply = () => {
+      const hidden = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      const focused = document.activeElement;
+      const typing = focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA');
+      document.documentElement.style.setProperty('--kb', (typing ? hidden : 0) + 'px');
+    };
+
+    vv.addEventListener('resize', apply);
+    vv.addEventListener('scroll', apply);
+    document.addEventListener('focusin', apply);
+    document.addEventListener('focusout', () => {
+      document.documentElement.style.setProperty('--kb', '0px');
+      // Safari can leave the layout viewport offset after the keyboard closes.
+      window.scrollTo(0, 0);
+    });
   }
 
   /* ------------------------------------------------------------------ *
@@ -864,13 +939,24 @@
 
   function registerSW() {
     if (!('serviceWorker' in navigator)) return;
+
+    // A worker that skips waiting starts serving the new shell to a page that
+    // is still running the old scripts. Reload once so the two match. The
+    // controller check keeps the very first install from reloading.
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading || !hadController) return;
+      reloading = true;
+      location.reload();
+    });
+
     navigator.serviceWorker.register('sw.js').then((reg) => {
       reg.addEventListener('updatefound', () => {
         const sw = reg.installing;
         if (!sw) return;
         sw.addEventListener('statechange', () => {
           if (sw.state === 'installed' && navigator.serviceWorker.controller) {
-            toast('Update ready — close and reopen the app', 5000);
+            toast('Updating…', 2500);
           }
         });
       });
@@ -888,6 +974,7 @@
 
     loadOpts();
     wire();
+    hadController = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
     registerSW();
 
     const cached = loadJson(RATE_KEY);
@@ -900,19 +987,20 @@
     if (!state.rate || Date.now() - state.rate.fetchedAt > 6 * 3600e3) refreshRate(false);
 
     setStatus('Getting the camera ready…');
+    const packPromise = ensurePack(false);
     await startCamera();
 
-    const ready = await ensurePack(false);
+    const ready = await packPromise;
     if (ready) {
-      setStatus(state.stream ? 'Point at a price and tap the button.' : 'Ready — scan a saved photo.');
       // Warm the OCR engine so the first real scan is not the slow one.
       await initWorker().catch(() => {});
+      setReadyStatus();
       window.__vpcReady = true;
     } else if (navigator.onLine) {
       setStatus('Saving the offline scanner…');
       if (await downloadPack(true)) {
-        setStatus('Ready — and it works offline from now on.');
         await initWorker().catch(() => {});
+        setReadyStatus(state.noStorage ? null : 'Ready — and it works offline from now on.');
         window.__vpcReady = true;
       }
     } else {

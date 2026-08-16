@@ -161,6 +161,114 @@ test('space-separated dates are not millions', () => {
   assert.equal(best('1 250 000'), 1250000);
 });
 
+// ---------------------------------------------------------------------------
+// Cases found by an adversarial audit of the parser. Each one was a real defect.
+// ---------------------------------------------------------------------------
+
+test('retail prices ending in 999 survive the zero-snap', () => {
+  assert.equal(best('19.999đ'), 19999);
+  assert.equal(best('199.999đ'), 199999);
+  assert.equal(best('1.999.999đ'), 1999999);
+  assert.equal(best('49.999đ'), 49999);
+  assert.equal(best('1.888.888'), 1888888, 'lucky-number pricing is real');
+});
+
+test('a leading + is a surcharge, not a mangled 7', () => {
+  assert.equal(best('Phụ thu +50.000'), 50000);
+  assert.equal(best('Size L +10.000'), 10000);
+  assert.equal(best('Thêm trứng +5k'), 5000);
+  assert.equal(best('18+'), null);
+  assert.equal(best('Combo 2+1'), null);
+});
+
+test('a quantity after a price is not a compound fraction', () => {
+  assert.equal(best('Bún 45k 2 tô'), 45000);
+  assert.equal(best('1tr 2 cái'), 1000000);
+  assert.equal(best('Combo 100k 4 người'), 100000);
+  assert.equal(best('Vé 200k 2 vé'), 200000);
+  assert.equal(best('1tr2'), 1200000, 'glued shorthand still works');
+});
+
+test('a trailing D is đồng, not a zero', () => {
+  assert.equal(best('35.000D'), 35000);
+  assert.equal(best('250.000 D'), 250000);
+});
+
+test('hotlines and landlines are not prices', () => {
+  assert.equal(best('Hotline: 1900 6017'), null);
+  assert.equal(best('Hotline 1900 1234'), null);
+  assert.equal(best('LH 1900 545 471'), null);
+  assert.equal(best('(024) 3825 1234'), null);
+  assert.equal(best('(+84) 909 123 456'), null);
+});
+
+test('labels are not prices', () => {
+  assert.equal(best('Phòng 305'), null);
+  assert.equal(best('Bàn 12'), null);
+  assert.equal(best('Size 42'), null);
+  assert.equal(best('Tầng 12'), null);
+  assert.equal(best('25°C'), null);
+  assert.equal(best('30°C hôm nay'), null);
+});
+
+test('a following word must not delete the price', () => {
+  assert.equal(best('250.000 Ship toàn quốc'), 250000);
+  assert.equal(best('45.000 Bát'), 45000);
+  assert.equal(best('1.200.000 Bao ship'), 1200000);
+  assert.equal(best('Cà phê 25.000 2 ly'), 25000);
+  assert.equal(best('Bia 20.000 3 chai'), 20000);
+  assert.deepEqual(all('Phở 65.000 Bún 55.000').sort((a, b) => a - b), [55000, 65000]);
+});
+
+test('units of measure survive digit repair', () => {
+  assert.equal(best('16 GB'), null);
+  assert.equal(best('500 GR'), null);
+  assert.equal(best('Thịt 500 GRAM'), null);
+  assert.equal(best('330ml'), null);
+  assert.equal(best('iPhone 128GB 12.500.000'), 12500000);
+});
+
+test('tỷ and chục', () => {
+  assert.equal(best('2 tỷ'), 2000000000);
+  assert.equal(best('3,5 tỷ'), 3500000000);
+  assert.equal(best('5 chục nghìn'), 50000);
+});
+
+test('billions written in full survive the phone mask', () => {
+  assert.equal(best('2.000.000.000'), 2000000000);
+  assert.equal(best('Giá 2.000.000.000 VNĐ'), 2000000000);
+  assert.equal(best('3.000.000.000 đ'), 3000000000);
+});
+
+test('dash ranges are prices, not dates', () => {
+  assert.equal(best('5-7 triệu'), 7000000);
+  assert.equal(best('10 - 20 nghìn'), 20000);
+});
+
+test('unmarked numbers ending in 900', () => {
+  assert.equal(best('89900'), 89900);
+  assert.equal(best('129900'), 129900);
+  assert.equal(best('19006017'), null, 'eight unmarked digits is an order number');
+});
+
+test('no quadratic blow-up on a long digit run', () => {
+  for (const input of ['1'.repeat(80000), '$1'.repeat(20000), '1.'.repeat(40000)]) {
+    const t0 = Date.now();
+    VPC.extract(input);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 250, `took ${ms}ms on a ${input.length}-char line`);
+  }
+});
+
+test('exported helpers do not throw on junk', () => {
+  assert.doesNotThrow(() => VPC.rank(null));
+  assert.doesNotThrow(() => VPC.readNumber(null));
+  assert.doesNotThrow(() => VPC.extract(null));
+  assert.doesNotThrow(() => VPC.extract(undefined));
+  assert.doesNotThrow(() => VPC.extract({}));
+  assert.deepEqual(VPC.rank(null), []);
+});
+
 test('formatting', () => {
   assert.match(VPC.formatVnd(120000), /120[.,\s]000\s*₫/);
   assert.equal(VPC.formatTwd(146.5), 'NT$147');

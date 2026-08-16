@@ -10,6 +10,8 @@
   --sheet-h: 40vh;
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
+  /* How much of the viewport the software keyboard is covering, set by app.js. */
+  --kb: 0px;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -31,6 +33,9 @@ input { -webkit-user-select: text; user-select: text; }
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  /* Lift the whole app clear of the software keyboard while typing. */
+  transform: translateY(calc(-1 * var(--kb)));
+  transition: transform .18s ease-out;
 }
 
 /* ---------- top bar ---------- */
@@ -324,6 +329,7 @@ input { -webkit-user-select: text; user-select: text; }
 .panel[hidden] { display: none; }
 .panel-card {
   width: 100%;
+  margin-bottom: var(--kb);
   max-width: 520px;
   max-height: 88dvh;
   overflow-y: auto;

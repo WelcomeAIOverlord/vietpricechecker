@@ -22,15 +22,24 @@
 
   // Multipliers. Order matters: longer alternatives must be tried first.
   const UNITS = [
+    { re: /^(?:t[yỷỉ]|ty)(?![a-zÀ-ỹ])/i, mult: 1e9, kind: 'billion' },
     { re: /^(?:tri[eệê]u|trieu|tr|c[uủ]|củ)(?![a-zÀ-ỹ])/i, mult: 1e6, kind: 'million' },
+    { re: /^ch[uụủ]c(?![a-zÀ-ỹ])/i, mult: 1e4, kind: 'ten-thousand' },
     { re: /^(?:ngh[iìí]n|nghin|ng[aà]n|ngan|ngh|k)(?![a-zÀ-ỹ])/i, mult: 1e3, kind: 'thousand' },
     { re: /^(?:vn[dđ]|vnd|dong|đ[oồ]ng|[đ₫]|d)(?![a-zÀ-ỹ])/i, mult: 1, kind: 'currency' },
   ];
 
   const CURRENCY_PREFIX = /(?:vn[dđ]|[đ₫]|gi[aá]\s*[:\-]?)\s*$/i;
 
+  // "Phòng 305" is a room, "Bàn 12" is a table. Only consulted for bare numbers
+  // that would otherwise be assumed to be thousands.
+  const LABEL_PREFIX = /(?:ph[oòơở]ng|b[aà]n|t[aâầ]ng|s[oố]|size|c[oỡ]|gh[eế]|qu[aậ]n|l[oô]|xe|m[aã]|k[eệ]|d[aã]y|lo[aạ]i|h[aạ]ng|ng[aà]y)\s*[:.\-]?\s*$/i;
+
+  // Vietnamese hotlines look exactly like a grouped price.
+  const HOTLINE_PREFIX = /(?:hotline|t[oổ]ng\s*[dđ][aà]i|lh|li[eê]n\s*h[eệ]|[dđ]t|s[dđ]t|tel|phone|call)\s*[:.\-]?\s*$/i;
+
   // If one of these follows the number it is a measurement, not money.
-  const MEASURE_AFTER = /^\s*(?:kg|gr?am|gr|g|ml|lit|l[iíì]t|cm|mm|km|m2|m²|ph[uú]t|gi[oờ]|tu[oổ]i|n[aă]m|ng[aà]y|th[aá]ng|%|°|inch|"|pcs|pax|w|kw|v|hz|mah|gb|mb|tb)(?![a-zÀ-ỹ])/i;
+  const MEASURE_AFTER = /^\s*(?:\+|°[cf]|kg|gr?am|gr|g|ml|lit|l[iíì]t|cm|mm|km|m2|m²|ph[uú]t|gi[oờ]|tu[oổ]i|n[aă]m|ng[aà]y|th[aá]ng|%|°|inch|"|pcs|pax|w|kw|v|hz|mah|gb|mb|tb)(?![a-zÀ-ỹ])/i;
 
   // Characters Tesseract commonly confuses with digits, applied only when a
   // token is already mostly numeric.
@@ -53,36 +62,62 @@
   function maskNonPrices(s) {
     const blank = (m) => ' '.repeat(m.length);
     return s
-      .replace(/\b\d{1,2}\s*[/\-]\s*\d{1,2}(?:\s*[/\-]\s*\d{2,4})?\b/g, blank) // 16/08, 16-08-2026
+      .replace(/\b\d{1,2}\s*\/\s*\d{1,2}(?:\s*\/\s*\d{2,4})?\b/g, blank) // 16/08, 16/08/2026
+      .replace(/\b\d{1,2}\s*-\s*\d{1,2}\s*-\s*\d{2,4}\b/g, blank) // 16-08-2026
+      .replace(/\b\d{1,2}\s+\d{1,2}\s+(?:19|20)\d{2}\b/g, blank) // 16 08 2026
       .replace(/\b\d{1,2}\.\d{1,2}\.(?:19|20)\d{2}\b/g, blank) // 16.08.2026
       .replace(/\b(?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2}\b/g, blank) // year ranges
       .replace(/\b\d{1,2}\s*[:h]\s*\d{2}\b/gi, blank) // 18:30 / 18h30
-      .replace(/\d+(?:[.,]\d+)?\s*%/g, blank) // 20%
-      .replace(/\b0\d{2,3}[.\s-]?\d{3,4}[.\s-]?\d{3,4}\b/g, blank) // phone numbers
-      .replace(/\b0\d{8,10}\b/g, blank);
+      .replace(/\d{1,12}(?:[.,]\d{1,6})?\s*%/g, blank) // 20%
+      .replace(/(?<![\d.,'’])0\d{2,3}[.\s-]?\d{3,4}[.\s-]?\d{3,4}(?![\d.,'’])/g, blank) // phones
+      .replace(/(?<![\d.,'’])0\d{8,10}(?![\d.,'’])/g, blank)
+      .replace(/\(?\s*\+\s*84\s*\)?[\s.\-]*\d[\d.\s-]{6,14}/g, blank);
   }
 
-  /** Repair OCR letter/digit confusion inside otherwise-numeric tokens. */
+  /**
+   * Repair OCR letter/digit confusion, one whitespace-delimited token at a
+   * time. Working across spaces was worse than useless: "250.000 Ship" became
+   * "250.000 5hip", the 5 joined the number as a third group, and the price
+   * disappeared rather than merely degrading.
+   */
   function repairDigits(s) {
-    let out = s.replace(/[0-9OoQDIlLSsBZzGb][0-9OoQDIlLSsBZzGb.,'’ ]{1,}[0-9OoQDIlLSsBZzGb]/g, (tok) => {
-      const digits = (tok.match(/[0-9]/g) || []).length;
-      const letters = (tok.match(/[A-Za-z]/g) || []).length;
-      if (digits === 0 || letters === 0) return tok;
-      // Only repair runs that clearly *start* as a number ("12O.OOO", "l20.000").
-      // Otherwise an all-caps word like "BOSS" would turn into digits.
-      if (!/^[0-9]|^.[0-9]/.test(tok)) return tok;
-      return tok.replace(/[A-Za-z]/g, (c) => DIGIT_FIX[c] || c);
-    });
+    return s.split(/(\s+)/).map(repairToken).join('');
+  }
 
-    // A short run of digit-lookalike letters glued to a price unit is a price
-    // with no surviving digits at all: hand-lettered "15k" comes back as "ISK".
-    out = out.replace(/\b[OoQDIlLSsBZzGb]{1,5}(?=\s?(?:k|tr|đ|₫)(?![a-zÀ-ỹ]))/gi, (tok) =>
-      tok.replace(/[A-Za-z]/g, (c) => DIGIT_FIX[c] || DIGIT_FIX[c.toUpperCase()] || c)
-    );
+  function repairToken(tok) {
+    if (!tok || /^\s+$/.test(tok) || tok.length > 64) return tok;
 
-    // Marker strokes turn 7 into # or +.
-    out = out.replace(/[#+](?=\d)|(?<=\d)[#+]/g, '7');
-    return out;
+    // A run of digit-lookalike letters glued to a price unit is a price with no
+    // surviving digits at all: hand-lettered "15k" comes back as "ISK".
+    if (!/[0-9]/.test(tok)) {
+      return tok.replace(/^[OoQDIlLSsBZzGb]{1,5}(?=(?:k|tr|đ|₫)$)/i, (run) =>
+        run.replace(/[A-Za-z]/g, (c) => DIGIT_FIX[c] || DIGIT_FIX[c.toUpperCase()] || c)
+      );
+    }
+
+    // "35.000D" is 35.000 đồng, not 35.0000 — never read a trailing currency
+    // letter as a zero.
+    const currency = tok.match(/(?:vn[dđ]|[dđ₫])$/i);
+    const body = currency ? tok.slice(0, -currency[0].length) : tok;
+    const suffix = currency ? currency[0] : '';
+
+    let out = body;
+    // Only repair a token that clearly starts as a number ("12O.OOO", "l20.000");
+    // otherwise an all-caps word like "BOSS" would turn into digits.
+    if (/[A-Za-z]/.test(body) && /^[0-9]|^.[0-9]/.test(body)) {
+      out = body.replace(/[A-Za-z]+/g, (run) => {
+        // Every letter has to be a known digit lookalike, and the run must not
+        // be a unit of measure — "128GB" and "330ml" are not 12868 and 330m1.
+        if (!run.split('').every((c) => DIGIT_FIX[c])) return run;
+        if (MEASURE_AFTER.test(run)) return run;
+        return run.replace(/./g, (c) => DIGIT_FIX[c]);
+      });
+    }
+
+    // Marker strokes turn 7 into #. A leading "+" is a surcharge ("+50.000")
+    // far more often than a mangled 7, so it only counts between digits.
+    out = out.replace(/#(?=\d)|(?<=\d)#/g, '7');
+    return out + suffix;
   }
 
   /**
@@ -102,7 +137,9 @@
 
     let d = null;
     for (const k of Object.keys(counts)) {
-      if (counts[k] >= 3 && k !== '0' && '689'.indexOf(k) !== -1) d = k;
+      // Deliberately only 6. Widening this to 8 or 9 would rewrite the lucky
+      // numbers and .999 retail prices that Vietnamese shops really use.
+      if (counts[k] >= 3 && k === '6') d = k;
     }
     if (!d) return null;
 
@@ -128,6 +165,7 @@
    * Returns { value, grouped } or null.
    */
   function readNumber(chunk) {
+    if (typeof chunk !== 'string') return null;
     const trimmed = chunk.replace(new RegExp('^' + SEP + '+|' + SEP + '+$', 'g'), '');
     if (!/\d/.test(trimmed)) return null;
     const groups = trimmed.split(new RegExp(SEP + '+')).filter(Boolean);
@@ -144,6 +182,10 @@
     if (groups.length === 1) {
       return { value: parseInt(groups[0], 10), grouped: false, decimals: 0, digits };
     }
+
+    // Vietnamese grouping never starts with more than three digits, so a
+    // space-separated run that does is a phone number: "1900 545 471".
+    if (groups.length > 1 && /\s/.test(trimmed) && groups[0].length > 3) return null;
 
     const tail = groups.slice(1);
     if (tail.every((g) => g.length === 3)) {
@@ -188,7 +230,10 @@
     const opts = Object.assign({ assumeThousands: true }, options || {});
     const src = maskNonPrices(repairDigits(normalize(line)));
 
-    const numRe = new RegExp('\\d(?:' + SEP + '?\\d)*', 'g');
+    // A space only continues a number when it is followed by exactly three
+    // digits, so "Hotline 1900 6017" and "25.000 2 ly" stay separate numbers
+    // while "1 250 000" does not.
+    const numRe = new RegExp("\\d(?:[.,'’·˙°^]?\\d)*(?:\\s\\d{3}(?!\\d))*", 'g');
     let m;
     while ((m = numRe.exec(src)) !== null) {
       const raw = m[0];
@@ -222,7 +267,7 @@
           mult = unit.mult;
           unitKind = unit.kind;
           // Compound shorthand: "1tr2" = 1.2 triệu, "1tr250" = 1.25 triệu.
-          const frac = after.match(/^\s?(\d{1,3})(?![\d.,])/);
+          const frac = after.match(/^(\d{1,3})(?![\d.,])/);
           if (frac && num.decimals === 0) {
             value = value + parseFloat('0.' + frac[1]);
             end += frac[0].length;
@@ -256,7 +301,17 @@
       // for itself, so it has to at least look like money. Every price in
       // circulation is a multiple of 500; a clock reading like "2200" is not.
       const bare = !num.grouped && !unitKind && !explicitCurrency;
-      if (bare && !assumed && value_vnd % 500 !== 0) continue;
+      if (bare && !assumed) {
+        // Below 10.000 the field is crowded with clock readings and years, so
+        // require a round number; above it, only cap the length — an eight
+        // digit unmarked run is an order number, not a price.
+        if (num.digits.length > 7) continue;
+        if (value_vnd < 10000 && value_vnd % 500 !== 0) continue;
+      }
+
+      // "Phòng 305" and "Hotline 1900 6017" are labels, not money.
+      if (assumed && LABEL_PREFIX.test(before)) continue;
+      if (HOTLINE_PREFIX.test(before)) continue;
 
       const matched = src.slice(start, end).trim();
       const base = {
@@ -319,6 +374,7 @@
    * person expects, instead of shuffling between scans.
    */
   function rank(candidates) {
+    if (!Array.isArray(candidates)) return [];
     const byValue = new Map();
     for (const c of candidates) {
       const prev = byValue.get(c.vnd);

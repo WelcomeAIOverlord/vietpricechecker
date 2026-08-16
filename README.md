@@ -151,19 +151,32 @@ npm run serve                     # http://localhost:8099
 Then, in another shell:
 
 ```bash
-npm test                          # parser unit tests, no browser
-python3 tools/make_fixtures.py    # build the 41-image corpus
+npm test                          # 34 parser unit tests, no browser
 npm run e2e                       # app behaviour, offline, installability
-npm run bench                     # OCR accuracy against the corpus
+npm run update                    # releases reach installed users; big photos
+npm run bench                     # OCR accuracy against the committed corpus
+npm run test:all                  # all four
 ```
+
+The fixture corpus is committed, so the benchmark measures the same pixels
+everywhere. `python3 tools/make_fixtures.py` regenerates it; CI checks that the
+generator still produces what is checked in.
 
 `npm run bench handwritten` runs a single category. Both browser suites accept
 `BASE=https://…/` to run against the deployed site instead of localhost, and
 `CHROME_PATH=` if Playwright's Chromium lives somewhere unusual.
 
 The benchmark enforces a per-category accuracy floor, so a change that makes
-recognition worse fails CI rather than shipping quietly. Every push runs the
-parser tests, the app tests and the benchmark before Pages deploys.
+recognition worse fails CI rather than shipping quietly. Every push runs all
+four suites before Pages deploys.
+
+`test/update.e2e.mjs` deserves a note: it serves a throwaway copy of the site at
+a subpath, edits it between reloads, and checks that a release actually reaches
+a browser that already installed the app. That failure mode is invisible in
+ordinary testing — the first install always looks right — and it is why `sw.js`
+carries a `__BUILD__` placeholder that CI replaces with the commit sha. Do not
+remove it, or every future deploy will stop short of the people already using
+the app.
 
 Regenerating the icons needs Pillow: `python3 tools/make_icons.py`.
 

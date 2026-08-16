@@ -11,7 +11,8 @@
     "serve": "npx --yes http-server -p 8099 -c-1 .",
     "bench": "node test/ocr-bench.mjs",
     "e2e": "node test/app.e2e.mjs",
-    "test:all": "npm test && npm run e2e && npm run bench"
+    "update": "node test/update.e2e.mjs",
+    "test:all": "npm test && npm run e2e && npm run update && npm run bench"
   },
   "devDependencies": {
     "playwright": "^1.56.1"
