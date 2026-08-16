@@ -19,6 +19,14 @@ const FIXTURES = path.join(HERE, 'fixtures');
 const SHOTS = path.join(HERE, 'shots');
 const BASE = process.env.BASE || 'http://localhost:8099/';
 const CHROME = process.env.CHROME_PATH || undefined;
+// Only route through a proxy when BASE is genuinely remote — sending loopback
+// traffic to one just breaks the local runs.
+const REMOTE = !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(BASE);
+const PROXY = REMOTE ? (process.env.HTTPS_PROXY || process.env.https_proxy) : null;
+const LAUNCH = {
+  executablePath: CHROME,
+  ...(PROXY ? { proxy: { server: PROXY, bypass: 'localhost,127.0.0.1,::1' } } : {}),
+};
 
 fs.mkdirSync(SHOTS, { recursive: true });
 
@@ -49,7 +57,7 @@ function assert(cond, msg) {
 }
 
 const browser = await chromium.launch({
-  executablePath: CHROME,
+  ...LAUNCH,
   args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
 });
 
@@ -59,6 +67,7 @@ const browser = await chromium.launch({
 
 console.log('\nFIRST RUN');
 const ctx = await browser.newContext({
+  ignoreHTTPSErrors: true,
   viewport: { width: 390, height: 844 },
   deviceScaleFactor: 2,
   isMobile: true,

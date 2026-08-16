@@ -7,9 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 # Never cancel a running deploy; just queue the next one.
 concurrency:
@@ -71,17 +69,8 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/configure-pages@v5
-        with:
-          # Turn Pages on the first time this runs, so the site goes live
-          # without anyone having to visit the repository settings.
-          enablement: true
 
       - name: Stamp the build id into the service worker
         # Without this the shell cache name never changes, so a deploy that
@@ -95,12 +84,43 @@ jobs:
           fi
           grep "const BUILD" sw.js
 
-      - name: Strip test-only assets from the deployed site
-        run: rm -rf test tools .github
+      - name: Assemble the site
+        run: |
+          rm -rf ../site && mkdir ../site
+          cp -r index.html styles.css app.js parser.js sw.js rate.json \
+                manifest.webmanifest icons vendor LICENSE README.md ../site/
+          touch ../site/.nojekyll
+          du -sh ../site
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
+      - name: Publish to gh-pages
+        # Pages is configured to serve the gh-pages branch. Deploying by push
+        # keeps the whole flow inside the default token's permissions.
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages --depth=1 || true
+          git checkout -B gh-pages
+          git rm -rq --cached . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -r ../site/. .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "site unchanged"
+            exit 0
+          fi
+          git commit -m "Deploy ${GITHUB_SHA::12}"
+          git push --force origin gh-pages
 
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Wait for the site to serve the new build
+        run: |
+          url="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/sw.js"
+          echo "checking $url"
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 20 "$url" | grep -q "${GITHUB_SHA::12}"; then
+              echo "live build is ${GITHUB_SHA::12}"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "the deployed site did not pick up ${GITHUB_SHA::12} in time"
+          exit 1

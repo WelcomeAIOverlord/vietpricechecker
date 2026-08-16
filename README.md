@@ -102,6 +102,13 @@ It corrects the mistakes Tesseract actually makes on price signs: `O`→`0`,
 `50.000` comes back as `56.666`. That reading is offered zeroed *and* literally,
 so nothing is silently rewritten.
 
+### Deployment
+
+`main` is deployed by `.github/workflows/pages.yml`: it runs all four suites,
+stamps the commit sha into `sw.js`, assembles the site without the test and
+tooling directories, pushes it to the `gh-pages` branch, and then polls the live
+URL until it is serving that commit. Pages is configured to serve `gh-pages`.
+
 ### Files
 
 | File | What it is |
@@ -119,10 +126,16 @@ No build step, no framework, no bundler. It is a folder of static files.
 
 Two caches with different lifetimes:
 
-- `vpc-shell-vN` — the HTML/CSS/JS, a few hundred KB, replaced on every deploy.
+- `vpc-shell-<commit>` — the HTML/CSS/JS, a few hundred KB. The commit sha in
+  the name is what makes a release reach people who already installed the app:
+  `sw.js` ships a `__BUILD__` placeholder that the deploy workflow replaces, so
+  the worker's bytes change on every release, a new one installs, and the whole
+  shell is swapped atomically. The page reloads itself once when that happens
+  so it is never new HTML running old JavaScript.
 - `vpc-engine-vN` — the ~6 MB WebAssembly engine and training data, written by
   the page on first run and **kept across deploys**, so shipping an update never
-  costs you another 6 MB download.
+  costs you another 6 MB download. Bump that name by hand, and only when those
+  files actually change.
 
 Nothing you photograph leaves the phone. The only outbound request the app ever
 makes is the exchange rate.
