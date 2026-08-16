@@ -39,8 +39,11 @@ jobs:
       - name: Parser tests
         run: npm test
 
-      - name: Build the fixture corpus
-        run: python3 tools/make_fixtures.py
+      - name: Check the fixture corpus is in sync
+        run: |
+          python3 tools/make_fixtures.py /tmp/regen
+          diff <(cd test/fixtures && ls) <(cd /tmp/regen && ls)
+          diff test/fixtures/index.json /tmp/regen/index.json
 
       - name: Serve the app
         run: |
