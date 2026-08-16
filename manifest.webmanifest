@@ -1,0 +1,17 @@
+{
+  "name": "Viet Price Checker — ₫ to NT$",
+  "short_name": "₫→NT$",
+  "description": "Point your camera at a Vietnamese price and read it in New Taiwan dollars. Works offline.",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1020",
+  "theme_color": "#0d1526",
+  "categories": ["travel", "utilities", "finance"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

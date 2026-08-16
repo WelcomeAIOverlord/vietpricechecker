@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>₫ → NT$ · Viet Price Checker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0d1526">
+<meta name="description" content="Point your camera at a Vietnamese price and read it in New Taiwan dollars. Works offline.">
+
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="₫→NT$">
+<meta name="format-detection" content="telephone=no">
+
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app">
+
+  <header id="topbar">
+    <button id="rateChip" class="chip" type="button" aria-haspopup="dialog">
+      <span id="rateValue">…</span>
+      <span id="rateAge" class="chip-sub"></span>
+    </button>
+    <span id="netChip" class="chip chip-quiet" hidden>offline</span>
+    <button id="settingsBtn" class="icon-btn" type="button" aria-label="Settings">⚙</button>
+  </header>
+
+  <main id="stage">
+    <video id="cam" playsinline webkit-playsinline muted autoplay disablepictureinpicture></video>
+
+    <div id="guideWrap" aria-hidden="true">
+      <div id="guide"></div>
+      <p id="guideHint">Fill the box with the price</p>
+    </div>
+
+    <div id="camGate">
+      <div class="gate-inner">
+        <p id="camGateMsg">This POC needs your camera to read price tags.</p>
+        <button id="camStart" class="btn btn-primary" type="button">Enable camera</button>
+        <button id="pickPhotoAlt" class="btn btn-ghost" type="button">Use a photo instead</button>
+      </div>
+    </div>
+
+    <div id="shotFlash" aria-hidden="true"></div>
+
+    <div id="controls">
+      <button id="pickPhoto" class="round-btn" type="button" aria-label="Scan a photo from your library">🖼</button>
+      <button id="shutter" class="shutter" type="button" aria-label="Scan the price">
+        <span class="shutter-ring"></span>
+      </button>
+      <button id="liveBtn" class="round-btn" type="button" aria-pressed="false" aria-label="Toggle continuous scanning">live</button>
+    </div>
+
+    <input id="fileInput" type="file" accept="image/*" hidden>
+  </main>
+
+  <section id="sheet" aria-live="polite">
+    <div id="status" class="status">Warming up…</div>
+
+    <div id="hero" hidden>
+      <div class="hero-main">
+        <span id="heroTwd" class="hero-twd">NT$0</span>
+        <span id="heroFlags" class="hero-flags"></span>
+      </div>
+      <div id="heroVnd" class="hero-vnd"></div>
+    </div>
+
+    <ul id="more" class="more"></ul>
+
+    <details id="rawWrap" hidden>
+      <summary>What the camera read</summary>
+      <pre id="raw"></pre>
+    </details>
+
+    <form id="manualForm" class="manual" autocomplete="off">
+      <input id="manualInput" type="text" inputmode="text" enterkeyhint="go"
+             placeholder="or type a price:  120.000  ·  35k  ·  1tr2">
+      <button class="btn btn-small" type="submit">=</button>
+    </form>
+  </section>
+
+</div>
+
+<div id="settingsPanel" class="panel" hidden role="dialog" aria-modal="true" aria-label="Settings">
+  <div class="panel-card">
+    <div class="panel-head">
+      <h2>Settings</h2>
+      <button id="settingsClose" class="icon-btn" type="button" aria-label="Close">✕</button>
+    </div>
+
+    <label class="row">
+      <span>Exchange rate</span>
+      <span class="row-value" id="rateDetail"></span>
+    </label>
+    <div class="row row-stack">
+      <div class="rate-edit">
+        <span class="rate-edit-label">1 NT$ =</span>
+        <input id="rateInput" type="number" inputmode="decimal" step="0.1" min="1">
+        <span class="rate-edit-label">₫</span>
+      </div>
+      <div class="row-actions">
+        <button id="rateRefresh" class="btn btn-small" type="button">Refresh</button>
+        <button id="rateAuto" class="btn btn-small btn-ghost" type="button">Use auto</button>
+      </div>
+    </div>
+
+    <label class="row row-toggle">
+      <span>
+        Bare numbers are thousands
+        <small>Reads a menu's “45” as 45.000 ₫</small>
+      </span>
+      <input id="optThousands" type="checkbox" checked>
+    </label>
+
+    <label class="row row-toggle">
+      <span>
+        Numbers-only OCR
+        <small>Stricter and faster, but drops words</small>
+      </span>
+      <input id="optDigits" type="checkbox">
+    </label>
+
+    <label class="row row-toggle">
+      <span>
+        Show what the camera read
+        <small>Handy when a scan goes wrong</small>
+      </span>
+      <input id="optRaw" type="checkbox">
+    </label>
+
+    <div class="row row-stack">
+      <span>Offline pack</span>
+      <span class="row-value" id="packStatus">checking…</span>
+      <div class="row-actions">
+        <button id="packBtn" class="btn btn-small" type="button">Download</button>
+      </div>
+    </div>
+
+    <p class="fineprint">
+      Everything runs on the phone — photos never leave it. Only the exchange
+      rate is fetched, and only when you have a connection.
+      <span id="version"></span>
+    </p>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="parser.js"></script>
+<script src="vendor/tesseract/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
