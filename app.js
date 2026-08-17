@@ -257,9 +257,15 @@
       got += value.length;
       onBytes(got);
     }
-    // Rebuild the response with its original headers so the cached copy is
-    // served with the right content type.
-    return new Response(new Blob(chunks), { status: 200, headers: res.headers });
+    // Rebuild the response carrying only the content type. The body here has
+    // already been decoded by fetch, so copying the original Content-Encoding
+    // would label plain bytes as gzip — GitHub Pages serves these files gzipped
+    // — and the original Content-Length is the compressed size, which no longer
+    // describes what is being stored.
+    const headers = new Headers();
+    const type = res.headers.get('content-type');
+    if (type) headers.set('Content-Type', type);
+    return new Response(new Blob(chunks), { status: 200, headers });
   }
 
   async function packPresent() {

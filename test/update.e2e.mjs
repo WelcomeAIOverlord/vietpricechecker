@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -114,11 +115,22 @@ const server = http.createServer((req, res) => {
     res.writeHead(404).end('not found');
     return;
   }
-  res.writeHead(200, {
-    'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
+  const ext = path.extname(file);
+  const headers = {
+    'Content-Type': TYPES[ext] || 'application/octet-stream',
     'Cache-Control': 'no-cache',
-  });
-  fs.createReadStream(file).pipe(res);
+  };
+  // GitHub Pages gzips text assets, including the multi-megabyte engine. Do the
+  // same here: caching a decoded body while carrying the original
+  // Content-Encoding is a real way to corrupt the offline install, and it is
+  // invisible against a server that does not compress.
+  const compress = /gzip/.test(req.headers['accept-encoding'] || '') &&
+    ['.js', '.css', '.html', '.json', '.webmanifest'].includes(ext);
+  if (compress) headers['Content-Encoding'] = 'gzip';
+  res.writeHead(200, headers);
+  const stream = fs.createReadStream(file);
+  if (compress) stream.pipe(zlib.createGzip()).pipe(res);
+  else stream.pipe(res);
 });
 await new Promise((r) => server.listen(0, r));
 const BASE = `http://localhost:${server.address().port}${MOUNT}/`;
@@ -162,6 +174,43 @@ await check('the page-side library lives in the shell, not the engine cache', as
   });
   assert(where.length === 1 && where[0].startsWith('vpc-shell-'),
     'tesseract.min.js is cached in: ' + where.join(', '));
+});
+
+await check('the engine is cached decoded, not mislabelled as gzip', async () => {
+  // The server above compresses .js, so this exercises the same path GitHub
+  // Pages puts users through. A cached body is already decoded; carrying the
+  // original Content-Encoding or Content-Length would describe it wrongly.
+  const info = await page.evaluate(async () => {
+    const k = (await caches.keys()).find((n) => n.startsWith('vpc-engine-'));
+    const cache = await caches.open(k);
+    const out = [];
+    for (const req of await cache.keys()) {
+      const res = await cache.match(req);
+      const body = await res.clone().arrayBuffer();
+      out.push({
+        url: req.url,
+        encoding: res.headers.get('content-encoding'),
+        declared: res.headers.get('content-length'),
+        bytes: body.byteLength,
+        // A decoded module starts with readable JavaScript, not gzip's 1f 8b.
+        gzipMagic: new Uint8Array(body)[0] === 0x1f && new Uint8Array(body)[1] === 0x8b,
+      });
+    }
+    return out;
+  });
+
+  for (const f of info) {
+    assert(f.encoding === null, f.url + ' is cached claiming ' + f.encoding);
+    if (f.declared !== null) {
+      assert(Number(f.declared) === f.bytes,
+        f.url + ' declares ' + f.declared + ' bytes but holds ' + f.bytes);
+    }
+    if (/\.wasm\.js$|worker\.min\.js$/.test(f.url)) {
+      assert(!f.gzipMagic, f.url + ' is still compressed in the cache');
+      assert(f.bytes > 100000, f.url + ' is only ' + f.bytes + ' bytes');
+    }
+  }
+  assert(info.length >= 3, 'expected the whole engine, got ' + info.length + ' files');
 });
 
 await check('the status line is not left mid-warm-up', async () => {
