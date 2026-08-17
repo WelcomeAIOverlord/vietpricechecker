@@ -12,7 +12,8 @@
     "bench": "node test/ocr-bench.mjs",
     "e2e": "node test/app.e2e.mjs",
     "update": "node test/update.e2e.mjs",
-    "test:all": "npm test && npm run e2e && npm run update && npm run bench"
+    "test:all": "npm test && npm run e2e && npm run update && npm run bench",
+    "worker": "node test/worker.smoke.mjs"
   },
   "devDependencies": {
     "playwright": "^1.56.1"

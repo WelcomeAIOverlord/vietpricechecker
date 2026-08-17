@@ -59,6 +59,19 @@ CREATE TABLE reports (
 CREATE INDEX reports_created ON reports (created_at DESC);
 ```
 
+## Checking it
+
+```bash
+npm run worker                          # read-only, safe against production
+ADMIN_KEY=… npm run worker              # also checks the review page
+WRITE=1 npm run worker                  # also posts a throwaway report
+```
+
+Covers health, routing, the browser preflight, the size cap, the malformed-body
+path and that `/reports` refuses a missing or wrong key. It is deliberately not
+part of the deploy pipeline — a green deploy of a static site should not depend
+on a third party being reachable at that moment.
+
 ## Deploying
 
 There is no build step; `index.js` is a module Worker uploaded as-is.
