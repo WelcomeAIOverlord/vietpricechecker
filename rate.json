@@ -1,6 +1,6 @@
 {
-  "vndPerTwd": 813.7,
-  "asOf": "2026-08-16T00:02:31Z",
+  "vndPerTwd": 814.3,
+  "asOf": "2026-08-17T00:02:31.000Z",
   "source": "open.er-api.com",
   "note": "Bundled fallback so the app shows a sensible number on first run and offline. Refreshed automatically by .github/workflows/update-rate.yml."
 }
