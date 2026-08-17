@@ -1,8 +1,14 @@
-# Support API (Cloudflare Worker + D1)
+# Bad-scan reports (Cloudflare Worker + D1)
 
-A small Worker that backs two optional things. **The app does not need it.**
-Scanning, converting and offline use all happen on the phone; this is only
-reached when someone reports a bad scan, or if cloud reading is ever switched on.
+**The app does not need this.** Scanning, converting and offline use all happen
+on the phone with no network at all. This is reached only when someone taps
+*Wrong? Report it*, which is inherently an online action. If it is down, or
+deleted outright, the app is unaffected — there are tests that assert exactly
+that.
+
+It exists because GitHub Pages is static and cannot receive a report, and
+because photographs of prices that actually broke the app are the only way to
+keep improving it.
 
 Live at `https://vietpricechecker-api.internalsys.workers.dev`.
 
@@ -10,7 +16,6 @@ Live at `https://vietpricechecker-api.internalsys.workers.dev`.
 | --- | --- |
 | `POST /report` | A tester says a scan was wrong. Stores the photo, what the app read, what it should have said, and a note. |
 | `GET /reports?key=…` | The review page: every report as a card with its image. Needs `ADMIN_KEY`. Add `&format=json` for raw data (omits images). |
-| `POST /read` | Sends one image to Gemini for a second opinion, so the API key stays server-side instead of in a public web page. |
 | `GET /health` | Liveness. |
 
 ## Reviewing what testers hit
@@ -42,8 +47,6 @@ stored.
 | --- | --- | --- |
 | `DB` | D1 | database `vietpricechecker` |
 | `ADMIN_KEY` | secret | guards `/reports` |
-| `GEMINI_KEY` | secret | used by `/read` |
-| `GEMINI_MODEL` | var (optional) | defaults to `gemini-flash-latest` |
 
 ## Schema
 
@@ -93,21 +96,17 @@ curl -X PUT -H "Authorization: Bearer $CF_API_TOKEN" \
 Secrets are set as `secret_text` bindings in that metadata, so they live in
 Cloudflare and never in this repository.
 
-## Status of the Gemini second opinion
+## Why there is no cloud recognition
 
-`/read` is written and deployed but **cannot currently run**. The supplied key
-lists models fine, and is refused for every inference call:
+There was a `/read` endpoint that sent an image to Gemini for a second opinion.
+It has been removed.
 
-```
-403  Your project has been denied access. Please contact support.
-```
+The supplied key was refused for every inference call — including a plain
+text-only request — with `403 Your project has been denied access`, so the
+project behind it was never enabled for the Generative Language API. That is
+fixable, but fixing it was not the right call: cloud recognition only helps
+when there is a connection, and it sends the photograph off the device. Both
+run against the point of the app, which is to work in a market with no signal
+and keep your pictures on your phone.
 
-A plain text-only "Say OK" fails the same way, so this is not about images or
-about the request shape — the Google Cloud project behind the key is not
-enabled for the Generative Language API. Enable it (or issue a key from a
-project that is) and `/read` starts working with no code change; the Worker
-returns Google's own message verbatim so the cause is visible from the app.
-
-Worth knowing before it is switched on: cloud reading sends the photo off the
-device, which is the one privacy promise the app currently makes without
-qualification. It should stay opt-in and clearly labelled.
+Recognition stays entirely on the device.

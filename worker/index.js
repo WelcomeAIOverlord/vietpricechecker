@@ -1,19 +1,22 @@
 /**
- * Viet Price Checker — support API.
+ * Viet Price Checker — bad-scan reports.
  *
- * Two jobs, both optional to the app. The PWA works completely without this
- * Worker; it is only reached when a tester reports a bad scan, or when the
- * cloud second opinion is switched on in Settings.
+ * One job, and the app never depends on it. Scanning, converting and offline
+ * use all happen on the phone with no network at all; this is reached only when
+ * someone taps "Wrong? Report it", which is inherently an online action. If it
+ * is down, or deleted, the app is unaffected.
  *
  *   POST /report   a tester says a scan was wrong. Stores the photo (as base64
  *                  in D1, since R2 needs a card on file) alongside what the app
  *                  read and what the right answer was.
  *   GET  /reports  the review page. Needs ADMIN_KEY.
- *   POST /read     forwards one image to Gemini for a second opinion, so the
- *                  API key stays here instead of in a public web page.
  *   GET  /health   liveness.
  *
- * Bindings: DB (D1), GEMINI_KEY (secret), ADMIN_KEY (secret).
+ * Bindings: DB (D1), ADMIN_KEY (secret).
+ *
+ * There was a /read endpoint that sent an image to Gemini for a second opinion.
+ * It is gone: the key was refused for every call, and more to the point it only
+ * ever helped online, which is the opposite of what this app is for.
  */
 
 const MAX_BODY = 900 * 1024; // a downscaled JPEG plus its JSON envelope
@@ -57,9 +60,6 @@ export default {
     }
     if (url.pathname === '/reports' && request.method === 'GET') {
       return handleReports(request, env, url);
-    }
-    if (url.pathname === '/read' && request.method === 'POST') {
-      return handleRead(request, env);
     }
     return json({ error: 'not found' }, 404);
   },
@@ -190,92 +190,4 @@ summary{cursor:pointer;color:#93a1bb;font-size:13px}
 <h1>Scan reports <span class="muted">(${rows.length})</span></h1>
 <div class="grid">${cards || '<p class="muted">Nothing reported yet.</p>'}</div>
 </body></html>`;
-}
-
-// ---------------------------------------------------------------------------
-
-const GEMINI_PROMPT = `You are reading a photo taken in Vietnam to find the PRICE of an item.
-
-Vietnamese prices are written in đồng: "120.000đ", "120,000 VND", "35k" (35,000),
-"1tr2" (1,200,000), "2 triệu" (2,000,000). A dot or comma is a thousands
-separator, never a decimal point. Menus often print just "45", meaning 45.000đ.
-
-Ignore anything that is not the item's price: barcodes, product or SKU codes,
-phone numbers, dates, weights and volumes (500g, 330ml), percentages, opening
-hours, table or room numbers, and addresses.
-
-Reply with JSON only, no prose, no code fence:
-{"prices":[{"vnd":<integer đồng>,"text":"<exactly as printed>","confidence":0..1}]}
-
-Order them most-likely-to-be-the-price first. If there is no price, use an empty
-array. Never invent a number that is not visible in the image.`;
-
-async function handleRead(request, env) {
-  if (!env.GEMINI_KEY) return json({ error: 'cloud reading is not configured' }, 501);
-
-  const raw = await request.text();
-  if (raw.length > MAX_BODY) return json({ error: 'payload too large' }, 413);
-
-  let body;
-  try {
-    body = JSON.parse(raw);
-  } catch (e) {
-    return json({ error: 'bad json' }, 400);
-  }
-  const image = typeof body.image === 'string' ? body.image : '';
-  const m = image.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
-  if (!m) return json({ error: 'expected a data: image URL' }, 400);
-
-  // This endpoint spends someone else's quota, so it is rate limited per client.
-  const ipHash = await hashIp(request);
-  if (await tooManyRecently(env, ipHash, 60, 60)) {
-    return json({ error: 'rate limited' }, 429);
-  }
-
-  const res = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/' + (env.GEMINI_MODEL || 'gemini-flash-latest') +
-      ':generateContent?key=' +
-      encodeURIComponent(env.GEMINI_KEY),
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: GEMINI_PROMPT },
-            { inline_data: { mime_type: m[1], data: m[2] } },
-          ],
-        }],
-        generationConfig: { temperature: 0, maxOutputTokens: 512, responseMimeType: 'application/json' },
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    // Surface the upstream reason verbatim — a denied project and a bad
-    // request look identical from the app otherwise.
-    let reason = (await res.text()).slice(0, 400);
-    try { reason = JSON.parse(reason).error.message; } catch (e) { /* keep raw */ }
-    return json({ error: 'gemini', status: res.status, detail: reason }, 502);
-  }
-
-  const data = await res.json();
-  const text = (((data.candidates || [])[0] || {}).content || {}).parts?.[0]?.text || '';
-  let parsed;
-  try {
-    parsed = JSON.parse(text.replace(/^```(?:json)?|```$/g, '').trim());
-  } catch (e) {
-    return json({ error: 'could not parse the model reply', raw: text.slice(0, 300) }, 502);
-  }
-
-  const prices = (parsed.prices || [])
-    .map((p) => ({
-      vnd: Math.round(Number(p.vnd)),
-      text: typeof p.text === 'string' ? p.text.slice(0, 40) : '',
-      confidence: Number(p.confidence) || 0,
-    }))
-    .filter((p) => Number.isFinite(p.vnd) && p.vnd >= 500 && p.vnd <= 5e9)
-    .slice(0, 8);
-
-  return json({ prices });
 }

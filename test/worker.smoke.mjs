@@ -81,9 +81,11 @@ await check('the review page needs a key', async () => {
   assert((await fetch(API + '/reports?key=obviously-wrong')).status === 401, 'a wrong key was accepted');
 });
 
-await check('cloud reading rejects anything that is not an image', async () => {
-  const r = await post('/read', { image: 'hello' });
-  assert(r.status === 400, 'HTTP ' + r.status);
+await check('there is no cloud-reading endpoint', async () => {
+  // Deliberately removed: it only helped online, which is the opposite of what
+  // this app is for. A 404 here is the desired state, not a gap.
+  const r = await post('/read', { image: 'x' });
+  assert(r.status === 404, 'HTTP ' + r.status + ' — /read should not exist');
 });
 
 if (ADMIN) {

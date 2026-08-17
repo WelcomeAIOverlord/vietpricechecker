@@ -165,8 +165,16 @@ Two caches with different lifetimes:
   costs you another 6 MB download. Bump that name by hand, and only when those
   files actually change.
 
-Nothing you photograph leaves the phone. The only outbound request the app ever
-makes is the exchange rate.
+Nothing you photograph leaves the phone unless you tap *Wrong? Report it*. The
+only outbound request the app makes on its own is the exchange rate, and it is
+fully usable without that too.
+
+**There is no cloud recognition, on purpose.** Sending the picture to a vision
+model would only help when there is a connection, and would put your photos on
+someone else's server — both the opposite of what this is for. Recognition runs
+on the phone, always. Two tests enforce it: one asserts that scanning contacts
+no server at all, and one runs the whole app with the report API blackholed to
+confirm nothing degrades.
 
 ## Exchange rate
 

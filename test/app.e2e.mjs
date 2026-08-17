@@ -419,6 +419,60 @@ await check('no absolute paths that would break on a project page', async () => 
   }
 });
 
+// ---------------------------------------------------------------------------
+// Independence: the app is a local tool. Nothing it does routinely may depend
+// on a server being reachable.
+// ---------------------------------------------------------------------------
+
+await check('scanning never talks to any server', async () => {
+  const calls = [];
+  const watch = (r) => {
+    const u = r.url();
+    if (!u.startsWith(new URL(BASE).origin) && !u.startsWith('data:') && !u.startsWith('blob:')) {
+      calls.push(u);
+    }
+  };
+  page.on('request', watch);
+  try {
+    await page.evaluate(() => { window.__vpcLast = null; });
+    await page.setInputFiles('#fileInput', SAMPLE);
+    await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+    await page.fill('#manualInput', '35k');
+    await page.click('#manualForm button[type=submit]');
+    await page.waitForTimeout(300);
+  } finally {
+    page.off('request', watch);
+  }
+  // The exchange rate may refresh in the background; nothing else is allowed,
+  // and the report API must never be touched without an explicit tap.
+  const offenders = calls.filter((u) => !/er-api\.com|currency-api|jsdelivr/.test(u));
+  assert(offenders.length === 0, 'scanning reached: ' + offenders.join(', '));
+  assert(!calls.some((u) => /workers\.dev/.test(u)), 'the report API was contacted without being asked');
+});
+
+await check('the app is unaffected when the report API is unreachable', async () => {
+  await page.route('**/*.workers.dev/**', (route) => route.abort('failed'));
+  try {
+    await page.evaluate(() => { window.__vpcLast = null; });
+    await page.setInputFiles('#fileInput', SAMPLE);
+    await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+    const r = await page.evaluate(() => window.__vpcLast);
+    assert(r.ranked.length && r.ranked[0].vnd === 120000, 'scan broke: ' + JSON.stringify(r.ranked.slice(0, 2)));
+
+    // Reporting itself should fail politely rather than hang or throw.
+    await page.click('#reportBtn');
+    await page.click('#reportSend');
+    await page.waitForFunction(
+      () => /Could not send|offline/i.test(document.getElementById('reportStatus').textContent),
+      null, { timeout: 20000 }
+    );
+    assert(!(await page.isHidden('#reportPanel')), 'the dialog closed as if it had worked');
+    await page.click('#reportClose');
+  } finally {
+    await page.unroute('**/*.workers.dev/**');
+  }
+});
+
 await check('a bad scan can be reported', async () => {
   // Intercept so the suite never writes to the real reports database.
   let sent = null;
