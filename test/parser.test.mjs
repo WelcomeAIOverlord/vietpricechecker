@@ -343,6 +343,21 @@ test('rounding rounds at a step that suits the size', () => {
   }
 });
 
+test('exact keeps the decimals instead of rounding', () => {
+  assert.equal(VPC.applyRounding(67.594, 'exact'), 67.59);
+  assert.equal(VPC.applyRounding(68.4, 'exact'), 68.4);
+  assert.equal(VPC.applyRounding(2.658, 'exact'), 2.66);
+  // Two decimals shown, even when the value is large enough that the other
+  // modes would drop them.
+  assert.equal(VPC.formatMoney(67.59, 'TWD', 'exact'), 'NT$67.59');
+  assert.equal(VPC.formatMoney(1475.9, 'TWD', 'exact'), 'NT$1,475.90');
+  assert.equal(VPC.formatMoney(67.59, 'TWD', 'nearest'), 'NT$68');
+  // And it sits between up and down, because it never moved.
+  const v = VPC.convert(55000, 813.7, 'exact');
+  assert.ok(v >= VPC.convert(55000, 813.7, 'down'));
+  assert.ok(v <= VPC.convert(55000, 813.7, 'up'));
+});
+
 test('converting đồng at a rate you were actually given', () => {
   // 55.000 ₫ at 800 ₫ to the dollar-ish unit.
   assert.equal(VPC.convert(55000, 800, 'nearest'), 69);

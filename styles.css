@@ -572,7 +572,7 @@ input { -webkit-user-select: text; user-select: text; }
   max-width: 62%;
 }
 .segmented-wide { width: 100%; margin-top: 10px; }
-.segmented-wide button { flex: 1; padding: 10px 0; }
+.segmented-wide button { flex: 1; padding: 10px 2px; font-size: 12.5px; }
 .row-hint { color: var(--muted); font-size: 13px; }
 
 .rate-edit { display: flex; align-items: center; gap: 8px; margin-top: 10px; }

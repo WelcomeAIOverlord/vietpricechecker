@@ -60,12 +60,15 @@ remembers the last one it saw.
 The price on the sign is always đồng; what it is shown as is your choice —
 sixteen currencies, TWD by default.
 
-**Rounding** has three settings. *Up* never understates what you will pay, which
-is the useful one when budgeting; *Down* is its opposite; *Normal* is nearest.
-Rounding happens at a step chosen from the size of the number, so it is never
-absurd — NT$68.4 becomes 68 or 69, while $2.65 becomes $2.6 or $2.7 rather than
-$2 or $3. What you see is exactly the rounded number, with no hidden decimals
-contradicting the mode.
+**Rounding** has four settings. *Up* never understates what you will pay, which
+is the useful one when budgeting; *Down* is its opposite; *Normal* is nearest;
+*Exact* does not round at all and shows the decimals.
+
+The three rounding modes work at a step chosen from the size of the number, so
+none of them is ever absurd — NT$68.4 becomes 68 or 69, while $2.65 becomes $2.6
+or $2.7 rather than $2 or $3. What you see is exactly the rounded number, with
+no hidden decimals contradicting the mode. *Exact* is the exception by design:
+nothing was rounded, so it shows two decimals — NT$67.59.
 
 **The rate is yours to set.** Published rates are fetched when there is a
 connection, but if you changed money at a counter you can type what you actually

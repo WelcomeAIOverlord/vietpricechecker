@@ -195,6 +195,17 @@ await check('rounding can be forced up or down', async () => {
     assert(up > down, `up and down are identical (${up})`);
     assert(Number.isInteger(up) && Number.isInteger(down), 'values above 10 should round to whole units');
 
+    // Exact keeps the decimals and sits between the two rounded readings.
+    await page.click('[data-round="exact"]');
+    await page.waitForTimeout(150);
+    const exactText = await page.textContent('#heroTwd');
+    assert(/\.\d\d$/.test(exactText.trim()), 'exact should show two decimals, got ' + exactText);
+    const exact = parseFloat(exactText.replace(/[^\d.]/g, ''));
+    assert(exact >= down && exact <= up, `exact ${exact} is outside ${down}..${up}`);
+    assert(!Number.isInteger(exact * 100) || exact !== Math.round(exact),
+      'exact looks rounded to a whole unit: ' + exactText);
+    assert(/exact/i.test(await page.textContent('#heroFlags')), 'the result is not marked exact');
+
     await page.click('[data-round="nearest"]');
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('vpc.opts') || '{}'));
     assert(saved.rounding === 'nearest', 'rounding not saved: ' + JSON.stringify(saved));

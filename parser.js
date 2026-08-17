@@ -496,8 +496,11 @@
     return 0.01;
   }
 
-  /** mode: 'up' | 'down' | anything else for nearest. */
+  /** mode: 'exact' | 'up' | 'down' | anything else for nearest. */
   function applyRounding(value, mode) {
+    // "exact" keeps the real figure; two decimals is as fine as money gets and
+    // is enough to stop float dust showing through.
+    if (mode === 'exact') return Math.round(value * 100) / 100;
     const step = roundingStep(value);
     const n = value / step;
     const rounded = mode === 'up' ? Math.ceil(n) : mode === 'down' ? Math.floor(n) : Math.round(n);
@@ -517,11 +520,16 @@
     return applyRounding(vnd / vndPerUnit, mode);
   }
 
-  function formatMoney(value, code) {
+  /**
+   * Shown precision follows the rounding step, so the number on screen is
+   * exactly the one that was rounded. In "exact" mode nothing was rounded, so
+   * it shows the two decimals money actually has.
+   */
+  function formatMoney(value, code, mode) {
     if (value == null || !Number.isFinite(value)) return '—';
     const cur = CURRENCIES[code] || { symbol: code + ' ' };
     const step = roundingStep(value);
-    const digits = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
+    const digits = mode === 'exact' ? 2 : step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
     const n = new Intl.NumberFormat('en-US', {
       minimumFractionDigits: digits,
       maximumFractionDigits: digits,

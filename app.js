@@ -244,7 +244,7 @@
   /** Format an amount of đồng in the chosen currency, with rounding applied. */
   function money(vnd) {
     const converted = VPC.convert(vnd, vndPerUnit(), state.rounding);
-    return converted == null ? '—' : VPC.formatMoney(converted, state.currency);
+    return converted == null ? '—' : VPC.formatMoney(converted, state.currency, state.rounding);
   }
 
   function renderRate() {
@@ -1362,7 +1362,8 @@
     else if (state.rates && Date.now() - state.rates.fetchedAt > 3 * 864e5) {
       addFlag('rate ' + ago(state.rates.fetchedAt));
     }
-    if (state.rounding !== 'nearest') addFlag('rounded ' + state.rounding);
+    if (state.rounding === 'up' || state.rounding === 'down') addFlag('rounded ' + state.rounding);
+    else if (state.rounding === 'exact') addFlag('exact');
 
     // Every other reading stays one tap away — on a shelf full of barcodes the
     // ranking is a suggestion, not a verdict.
@@ -1557,7 +1558,7 @@
     const saved = loadJson(OPTS_KEY);
     if (saved) Object.assign(state.opts, saved);
     if (saved && VPC.CURRENCIES[saved.currency]) state.currency = saved.currency;
-    if (saved && ['up', 'down', 'nearest'].includes(saved.rounding)) state.rounding = saved.rounding;
+    if (saved && ['up', 'down', 'nearest', 'exact'].includes(saved.rounding)) state.rounding = saved.rounding;
     el.optThousands.checked = state.opts.thousands;
     el.optDigits.checked = state.opts.digits;
     el.optRaw.checked = state.opts.raw;
