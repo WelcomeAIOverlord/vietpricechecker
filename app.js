@@ -551,26 +551,28 @@
    * next to it.
    * ------------------------------------------------------------------ */
 
-  /** Copy the current video frame at full sensor resolution. */
+  /**
+   * Capture the current video frame. It is drawn straight into the canvas that
+   * displays it: a phone frame is tens of megabytes, and keeping a separate
+   * copy for OCR would double that for no reason.
+   */
   function grabFrame() {
     const vw = el.cam.videoWidth;
     const vh = el.cam.videoHeight;
     if (!vw || !vh) throw new Error('camera not ready yet');
-    const canvas = document.createElement('canvas');
-    canvas.width = vw;
-    canvas.height = vh;
-    canvas.getContext('2d').drawImage(el.cam, 0, 0);
-    return { canvas, w: vw, h: vh };
+    return drawIntoStill(el.cam, vw, vh);
+  }
+
+  function drawIntoStill(source, w, h) {
+    el.still.width = w;
+    el.still.height = h;
+    el.still.getContext('2d').drawImage(source, 0, 0, w, h);
+    return { canvas: el.still, w, h };
   }
 
   /** Show a frozen frame and switch the stage into selection mode. */
   function freeze(frame) {
     state.frozen = frame;
-    const ctx = el.still.getContext('2d');
-    el.still.width = frame.w;
-    el.still.height = frame.h;
-    ctx.drawImage(frame.canvas, 0, 0);
-
     el.still.hidden = false;
     el.selectLayer.hidden = false;
     el.frozenBar.hidden = false;
@@ -584,6 +586,8 @@
     state.frozen = null;
     state.frozenFit = null;
     el.still.hidden = true;
+    // Hand the frame's backing store back before starting the camera again.
+    releaseCanvas(el.still);
     el.selectLayer.hidden = true;
     el.frozenBar.hidden = true;
     el.selectBox.hidden = true;
@@ -997,14 +1001,11 @@
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.getContext('2d').drawImage(img, 0, 0);
-      freeze({ canvas, w: canvas.width, h: canvas.height });
+      const frame = drawIntoStill(img, img.naturalWidth, img.naturalHeight);
+      freeze(frame);
 
       state.chosen = null;
-      runScan(async () => prepareCanvas(canvas, canvas.width, canvas.height, null), 'file')
+      runScan(async () => prepareCanvas(frame.canvas, frame.w, frame.h, null), 'file')
         .then((result) => {
           if (!state.frozen) return;
           el.frozenHint.textContent = result && result.ranked.length
