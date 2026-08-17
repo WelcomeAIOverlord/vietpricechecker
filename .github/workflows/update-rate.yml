@@ -17,6 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A scheduled run checks out whatever ref triggered it; be explicit so
+          # the refreshed rate always lands on main and gets deployed.
+          ref: main
 
       - name: Fetch VND → TWD
         run: |
@@ -48,4 +52,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "chore: refresh bundled VND/TWD fallback rate"
-          git push
+          git push origin HEAD:main
