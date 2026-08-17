@@ -53,6 +53,15 @@ self.addEventListener('install', (event) => {
   );
 });
 
+// The page asks which build is serving it, so a bad-scan report can say which
+// deploy produced it. Answering from memory avoids a network request that would
+// fail while offline.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'build' && event.source) {
+    event.source.postMessage({ type: 'build', build: BUILD });
+  }
+});
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()

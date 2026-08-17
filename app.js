@@ -1362,6 +1362,27 @@
    * service worker
    * ------------------------------------------------------------------ */
 
+  /**
+   * Ask the controlling worker which build it is, so a report can name the
+   * deploy that produced it. Fetching sw.js would have done the same thing and
+   * failed every time the app was offline.
+   */
+  function askBuildId() {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'build' && e.data.build) {
+        state.build = e.data.build;
+        el.version.textContent = 'v' + VERSION + ' · build ' + state.build;
+      }
+    });
+    navigator.serviceWorker.ready
+      .then((reg) => {
+        const sw = navigator.serviceWorker.controller || reg.active;
+        if (sw) sw.postMessage({ type: 'build' });
+      })
+      .catch(() => {});
+  }
+
   function registerSW() {
     if (!('serviceWorker' in navigator)) return;
 
@@ -1394,14 +1415,7 @@
 
   async function boot() {
     el.version.textContent = 'v' + VERSION + ' · offline OCR by Tesseract';
-    fetch('sw.js', { cache: 'no-store' })
-      .then((r) => r.text())
-      .then((t) => {
-        const m = t.match(/const BUILD = '([^']+)'/);
-        state.build = m ? m[1] : 'dev';
-        el.version.textContent = 'v' + VERSION + ' · build ' + state.build;
-      })
-      .catch(() => {});
+    askBuildId();
     state.coreUrl = wasmSimdSupported() ? CORE_SIMD : CORE_PLAIN;
     el.netChip.hidden = navigator.onLine;
 
