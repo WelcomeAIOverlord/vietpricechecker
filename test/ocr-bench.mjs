@@ -40,6 +40,7 @@ const THRESHOLDS = {
   'handwritten': 0.85,
   'negative': 1.0,
   'currency-glyph': 1.0,
+  'clutter': 1.0,
 };
 
 if (!fs.existsSync(path.join(FIXTURES, 'index.json'))) {
@@ -98,6 +99,10 @@ for (const c of cases) {
   } else {
     ok = top === c.expect;
   }
+  // A barcode or SKU printed beside the price must never be offered as one.
+  const banned = (c.mustExclude || []).filter((v) => all.includes(v));
+  if (banned.length) ok = false;
+  if (banned.length) c.note = c.note + ' — returned ' + banned.join(', ');
 
   rows.push({ ...c, ok, got: top, all, ms: Date.now() - t0, raw: (result.text || '').replace(/\s+/g, ' ').slice(0, 70) });
 }

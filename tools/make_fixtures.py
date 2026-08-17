@@ -236,6 +236,46 @@ def scene_dong_menu(rng):
     return img
 
 
+def draw_barcode(d, x, y, w, h, digits, rng, font_size=26):
+    """An EAN-13 style block: bars, then the digits printed underneath.
+
+    Those digits are the whole point — they are the same size and shape as a
+    price and sit right next to one.
+    """
+    cursor = x
+    while cursor < x + w - 3:
+        bar = rng.choice([2, 2, 3, 4, 6])
+        if rng.random() < 0.55:
+            d.rectangle([cursor, y, cursor + bar - 1, y + h], fill=(20, 20, 24))
+        cursor += bar
+    font = ImageFont.truetype(PRINT_FONTS[5], font_size)
+    d.text((x, y + h + 6), digits, font=font, fill=(20, 20, 24))
+
+
+def scene_shelf_label(rng, name, price, ean, per_kg=None, code=None):
+    """A supermarket shelf label: the price, and a lot of numbers that are not."""
+    img = Image.new("RGB", (W, H), (206, 210, 214))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([60, 70, W - 60, H - 70], radius=10, fill=(253, 253, 251),
+                        outline=(150, 156, 162), width=2)
+
+    d.text((95, 110), name, font=ImageFont.truetype(PRINT_FONTS[0], 42), fill=(24, 24, 28))
+    if code:
+        d.text((95, 168), code, font=ImageFont.truetype(PRINT_FONTS[5], 26), fill=(90, 96, 104))
+
+    big = ImageFont.truetype(PRINT_FONTS[0], 96)
+    d.text((95, 250), price, font=big, fill=(18, 18, 22))
+    box = d.textbbox((0, 0), price, font=big)
+    d.text((95 + (box[2] - box[0]) + 12, 262),
+           "đ", font=ImageFont.truetype(PRINT_FONTS[0], 50), fill=(18, 18, 22))
+
+    if per_kg:
+        d.text((95, 372), per_kg, font=ImageFont.truetype(PRINT_FONTS[0], 30), fill=(90, 96, 104))
+
+    draw_barcode(d, 95, H - 200, 420, 86, ean, rng)
+    return img
+
+
 def cardboard(rng):
     """A muted brown board with fibre speckle."""
     img = Image.new("RGB", (W, H), (198, 170, 132))
@@ -257,13 +297,15 @@ def build(outdir):
     rng = random.Random(20260816)
     index = []
 
-    def add(name, img, expect, category, note, must_include=None):
+    def add(name, img, expect, category, note, must_include=None, must_exclude=None):
         path = os.path.join(outdir, name + ".jpg")
         img.convert("RGB").save(path, "JPEG", quality=88)
         index.append({
             "file": name + ".jpg",
             "expect": expect,
             "mustInclude": must_include or [],
+            # Numbers that are printed on the label but are never the price.
+            "mustExclude": must_exclude or [],
             "category": category,
             "note": note,
         })
@@ -428,6 +470,27 @@ def build(outdir):
     add("dong_super_menu", scene_dong_menu(rng), 25000, "currency-glyph",
         "menu column with raised đồng signs",
         [25000, 30000, 15000])
+
+    # ---- 9. clutter: the numbers that are not the price -----------------
+    # A shelf label prints an EAN, a product code and a per-kilo rate in the
+    # same place as the price. This is the case testers actually hit.
+    add("clutter_shelf_barcode",
+        scene_shelf_label(rng, "Nước mắm Nam Ngư 500ml", "38.500", "8934563138905",
+                          per_kg="77.000 đ/lít", code="SKU 4471202"),
+        38500, "clutter", "shelf label with an EAN, a SKU and a per-litre rate",
+        must_exclude=[8934563138905, 893456313890])
+
+    add("clutter_shelf_tilted",
+        perspective(scene_shelf_label(rng, "Cà phê G7 hộp 20 gói", "62.000",
+                                      "8935024140017", code="MSP 220145"), rng, 0.07),
+        62000, "clutter", "shelf label, photographed off-axis",
+        must_exclude=[8935024140017])
+
+    base = scene_shelf_label(rng, "Bánh Choco-Pie 12 cái", "56.000", "8801117410018",
+                             per_kg="155.000 đ/kg", code="SKU 9920417")
+    add("clutter_shelf_dim", noise(uneven_light(base, rng, 0.34), rng, 0.05),
+        56000, "clutter", "shelf label under bad shop lighting",
+        must_exclude=[8801117410018])
 
     with open(os.path.join(outdir, "index.json"), "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=2)
