@@ -52,8 +52,26 @@ remembers the last one it saw.
   a menu; it uses more battery.
 - **Type a price** — the field at the bottom accepts `120.000`, `35k`, `1tr2`,
   `1,5 triệu` and so on, which is useful when someone tells you a price out loud.
-- **Rate chip** (top left) — tap it to see where the rate came from, refresh it,
-  or type your own if you got a different rate at the money changer.
+- **Rate chip** (top left) — tap it for Settings: which currency to show, how to
+  round, and the rate itself.
+
+### Currency, rounding and your own rate
+
+The price on the sign is always đồng; what it is shown as is your choice —
+sixteen currencies, TWD by default.
+
+**Rounding** has three settings. *Up* never understates what you will pay, which
+is the useful one when budgeting; *Down* is its opposite; *Normal* is nearest.
+Rounding happens at a step chosen from the size of the number, so it is never
+absurd — NT$68.4 becomes 68 or 69, while $2.65 becomes $2.6 or $2.7 rather than
+$2 or $3. What you see is exactly the rounded number, with no hidden decimals
+contradicting the mode.
+
+**The rate is yours to set.** Published rates are fetched when there is a
+connection, but if you changed money at a counter you can type what you actually
+got and see your true cost instead of a mid-market fiction. Your rate is kept
+per currency, is marked *your rate* on every result, and survives a refresh of
+the published ones until you tap *Use published*.
 
 ### What the tags mean
 
@@ -156,7 +174,7 @@ URL until it is serving that commit. Pages is configured to serve `gh-pages`.
 | `parser.js` | Vietnamese price grammar — no browser needed, unit tested |
 | `sw.js` | Service worker; separate shell and engine caches |
 | `vendor/` | Tesseract runtime and English training data, committed so the app has no CDN dependency |
-| `rate.json` | Fallback exchange rate, refreshed weekly by a workflow |
+| `rate.json` | Bundled fallback rates, đồng per unit for every currency, refreshed weekly by a workflow |
 
 No build step, no framework, no bundler. It is a folder of static files.
 
@@ -190,12 +208,15 @@ confirm nothing degrades.
 
 Fetched from [open.er-api.com](https://open.er-api.com), falling back to
 [currency-api](https://github.com/fawazahmed0/exchange-api). Neither needs a key.
-The last good rate is saved, and `rate.json` ships a bundled starting value that
+One request covers every currency. Rates are stored as **đồng per one unit** —
+the number written on the board at a money changer — so the value you type in
+Settings is the value you were quoted, not its reciprocal.
+
+The last good set is saved, and `rate.json` ships bundled starting values that
 `.github/workflows/update-rate.yml` refreshes weekly.
 
-There is no rate that is right to the đồng — what you actually pay at a money
-changer or an ATM differs. Treat the number as a good estimate, and use the
-manual rate box if you want it to match what you really got.
+No published rate is right to the đồng: what you actually pay at a counter or an
+ATM differs. That is what the manual rate is for.
 
 ## Development
 
@@ -242,6 +263,7 @@ Regenerating the icons needs Pillow: `python3 tools/make_icons.py`.
 ## Licence
 
 MIT for the app code. Bundled dependencies keep their own licences:
+[Lucide](https://lucide.dev) icons are ISC (inlined as a sprite in `index.html`),
 [Tesseract.js](https://github.com/naptha/tesseract.js) and the Tesseract engine
 are Apache 2.0 (see `vendor/tesseract/`), and the handwriting fonts used only by
 the test fixtures are SIL OFL 1.1 (see `test/fonts/README.md`).

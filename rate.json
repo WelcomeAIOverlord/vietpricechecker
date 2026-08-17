@@ -1,6 +1,23 @@
 {
-  "vndPerTwd": 814.3,
+  "vndPerUnit": {
+    "TWD": 814.33,
+    "USD": 26315.79,
+    "EUR": 30303.03,
+    "GBP": 35714.29,
+    "JPY": 163.72,
+    "KRW": 18.42,
+    "CNY": 3861,
+    "HKD": 3322.26,
+    "SGD": 20408.16,
+    "MYR": 6369.43,
+    "THB": 786.78,
+    "PHP": 422.65,
+    "IDR": 1.46,
+    "INR": 273.15,
+    "AUD": 18518.52,
+    "CAD": 18867.92
+  },
   "asOf": "2026-08-17T00:02:31.000Z",
   "source": "open.er-api.com",
-  "note": "Bundled fallback so the app shows a sensible number on first run and offline. Refreshed automatically by .github/workflows/update-rate.yml."
+  "note": "Bundled fallback so the app shows sensible numbers on first run and offline. Đồng per one unit of each currency. Refreshed by .github/workflows/update-rate.yml."
 }

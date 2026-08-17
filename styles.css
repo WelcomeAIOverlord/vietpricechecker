@@ -20,6 +20,17 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* Lucide icons are stroked outlines; these are their required defaults. */
+.icon {
+  display: block;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 html, body {
   margin: 0;
   height: 100%;
@@ -241,7 +252,10 @@ input { -webkit-user-select: text; user-select: text; }
   font-weight: 600;
 }
 .pill-quiet { color: var(--muted); font-weight: 400; }
-.pill-icon { width: 38px; padding: 8px 0; text-align: center; font-size: 18px; line-height: 1; }
+.pill-icon { width: 40px; padding: 0; height: 36px; display: grid; place-items: center; }
+.pill-with-icon { display: inline-flex; align-items: center; gap: 6px; }
+.sheet-chev { margin: 2px auto 0; color: #46567a; transition: transform .22s ease; }
+#sheet.open .sheet-chev { transform: rotate(180deg); color: var(--teal); }
 
 /* One finger draws a box, or moves the picture. Two fingers always pinch. */
 .segmented {
@@ -548,7 +562,20 @@ input { -webkit-user-select: text; user-select: text; }
   accent-color: var(--teal);
 }
 
-.rate-edit { display: flex; align-items: center; gap: 8px; }
+.picker {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 15px;
+  max-width: 62%;
+}
+.segmented-wide { width: 100%; margin-top: 10px; }
+.segmented-wide button { flex: 1; padding: 10px 0; }
+.row-hint { color: var(--muted); font-size: 13px; }
+
+.rate-edit { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .rate-edit-label { color: var(--muted); font-size: 13px; }
 .rate-edit input {
   width: 110px;

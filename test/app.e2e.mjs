@@ -135,16 +135,72 @@ await check('manual entry works', async () => {
   assert(vnd === '1200000', 'got ' + vnd);
 });
 
-await check('a manual rate override is applied and persisted', async () => {
-  await page.click('#settingsBtn');
-  await page.fill('#rateInput', '800');
-  await page.dispatchEvent('#rateInput', 'change');
-  await page.waitForTimeout(150);
-  const twd = await page.textContent('#heroTwd');
-  assert(twd.includes('1,500'), '1.200.000 / 800 should be NT$1,500, got ' + twd);
-  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('vpc.rate')));
-  assert(stored.manual === true && stored.vndPerTwd === 800, JSON.stringify(stored));
-  await page.click('#settingsClose');
+await check('your own rate is applied and persisted', async () => {
+  try {
+    await page.click('#settingsBtn');
+    await page.fill('#rateInput', '800');
+    await page.dispatchEvent('#rateInput', 'change');
+    await page.waitForTimeout(200);
+    const shown = await page.textContent('#heroTwd');
+    assert(shown.includes('1,500'), '1.200.000 / 800 should be NT$1,500, got ' + shown);
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('vpc.manual') || '{}'));
+    assert(stored.TWD === 800, 'stored ' + JSON.stringify(stored));
+    assert(/your rate/i.test(await page.textContent('#heroFlags')), 'the result is not marked as yours');
+  } finally {
+    // Leaving the panel open would block every later click.
+    await page.click('#settingsClose').catch(() => {});
+  }
+});
+
+await check('the currency can be changed', async () => {
+  try {
+    await page.click('#settingsBtn');
+    // A rate you set for one currency must not leak into another.
+    await page.selectOption('#currencySelect', 'USD');
+    await page.waitForTimeout(250);
+    const usd = await page.textContent('#heroTwd');
+    assert(usd.trim().startsWith('$'), 'expected dollars, got ' + usd);
+    assert(!usd.includes('NT$'), 'still showing NT$: ' + usd);
+
+    const opts = await page.evaluate(() => JSON.parse(localStorage.getItem('vpc.opts') || '{}'));
+    assert(opts.currency === 'USD', 'currency not saved: ' + JSON.stringify(opts));
+
+    await page.selectOption('#currencySelect', 'TWD');
+    await page.waitForTimeout(250);
+    const back = await page.textContent('#heroTwd');
+    assert(back.includes('1,500'), 'the TWD rate you set was lost: ' + back);
+  } finally {
+    await page.click('#settingsClose').catch(() => {});
+  }
+});
+
+await check('rounding can be forced up or down', async () => {
+  try {
+    await page.click('#settingsBtn');
+    // 1.200.000 at 813 đồng is 1475.9..., so the three modes must differ.
+    await page.fill('#rateInput', '813');
+    await page.dispatchEvent('#rateInput', 'change');
+    await page.waitForTimeout(150);
+
+    const read = async (mode) => {
+      await page.click(`[data-round="${mode}"]`);
+      await page.waitForTimeout(150);
+      return parseFloat((await page.textContent('#heroTwd')).replace(/[^\d.]/g, ''));
+    };
+    const up = await read('up');
+    const near = await read('nearest');
+    const down = await read('down');
+
+    assert(up >= near && near >= down, `expected up >= normal >= down, got ${up} / ${near} / ${down}`);
+    assert(up > down, `up and down are identical (${up})`);
+    assert(Number.isInteger(up) && Number.isInteger(down), 'values above 10 should round to whole units');
+
+    await page.click('[data-round="nearest"]');
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('vpc.opts') || '{}'));
+    assert(saved.rounding === 'nearest', 'rounding not saved: ' + JSON.stringify(saved));
+  } finally {
+    await page.click('#settingsClose').catch(() => {});
+  }
 });
 
 await check('the thousands assumption can be turned off', async () => {

@@ -298,12 +298,69 @@ test('a raised đồng sign read as a digit does not inflate the price', () => {
 
 test('formatting', () => {
   assert.match(VPC.formatVnd(120000), /120[.,\s]000\s*₫/);
+  // Shown precision follows the rounding step, so the number on screen is
+  // exactly the rounded one — no hidden digits to contradict "up" or "down".
   assert.equal(VPC.formatTwd(146.5), 'NT$147');
-  assert.equal(VPC.formatTwd(43.21), 'NT$43.2');
-  assert.equal(VPC.formatTwd(3.456), 'NT$3.46');
+  assert.equal(VPC.formatTwd(43.21), 'NT$43');
+  assert.equal(VPC.formatTwd(3.456), 'NT$3.5');
+  assert.equal(VPC.formatTwd(0.42), 'NT$0.42');
 });
 
 test('conversion', () => {
   // ~819 VND per 1 TWD
   assert.equal(Math.round(VPC.toTwd(120000, 819)), 147);
+});
+
+test('every currency has a symbol and a name', () => {
+  const codes = Object.keys(VPC.CURRENCIES);
+  assert.ok(codes.length >= 10, 'only ' + codes.length + ' currencies');
+  assert.ok(codes.includes('TWD') && codes.includes('USD'));
+  for (const [code, c] of Object.entries(VPC.CURRENCIES)) {
+    assert.match(code, /^[A-Z]{3}$/, code + ' is not an ISO code');
+    assert.ok(c.symbol && c.name, code + ' is missing a symbol or name');
+  }
+});
+
+test('rounding rounds at a step that suits the size', () => {
+  // Big enough to read as whole units.
+  assert.equal(VPC.roundingStep(68.4), 1);
+  assert.equal(VPC.applyRounding(68.4, 'up'), 69);
+  assert.equal(VPC.applyRounding(68.4, 'down'), 68);
+  assert.equal(VPC.applyRounding(68.4, 'nearest'), 68);
+  assert.equal(VPC.applyRounding(68.6, 'nearest'), 69);
+
+  // Small amounts keep a decimal, so "round up" is not a threefold overstatement.
+  assert.equal(VPC.roundingStep(2.65), 0.1);
+  assert.equal(VPC.applyRounding(2.65, 'up'), 2.7);
+  assert.equal(VPC.applyRounding(2.65, 'down'), 2.6);
+  assert.equal(VPC.roundingStep(0.35), 0.01);
+  assert.equal(VPC.applyRounding(0.352, 'up'), 0.36);
+
+  // Up is never below the true value, down never above it.
+  for (const v of [1.01, 9.99, 10.01, 68.4, 147.5, 0.011]) {
+    assert.ok(VPC.applyRounding(v, 'up') >= v - 1e-9, 'up went below ' + v);
+    assert.ok(VPC.applyRounding(v, 'down') <= v + 1e-9, 'down went above ' + v);
+  }
+});
+
+test('converting đồng at a rate you were actually given', () => {
+  // 55.000 ₫ at 800 ₫ to the dollar-ish unit.
+  assert.equal(VPC.convert(55000, 800, 'nearest'), 69);
+  assert.equal(VPC.convert(55000, 800, 'up'), 69);
+  assert.equal(VPC.convert(55000, 800, 'down'), 68);
+  // A worse rate costs you more of your own currency.
+  assert.ok(VPC.convert(55000, 700, 'nearest') > VPC.convert(55000, 900, 'nearest'));
+  // Nonsense rates are refused rather than yielding Infinity.
+  assert.equal(VPC.convert(55000, 0, 'nearest'), null);
+  assert.equal(VPC.convert(55000, -5, 'nearest'), null);
+});
+
+test('money is formatted with its own symbol', () => {
+  assert.equal(VPC.formatMoney(69, 'TWD'), 'NT$69');
+  assert.equal(VPC.formatMoney(2.1, 'USD'), '$2.1');
+  assert.equal(VPC.formatMoney(324, 'JPY'), '¥324');
+  assert.equal(VPC.formatMoney(1500, 'TWD'), 'NT$1,500');
+  assert.equal(VPC.formatMoney(null, 'TWD'), '—');
+  // The old helper still agrees with the general one.
+  assert.equal(VPC.formatTwd(69), VPC.formatMoney(69, 'TWD'));
 });

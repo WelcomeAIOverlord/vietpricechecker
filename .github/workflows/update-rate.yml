@@ -22,24 +22,33 @@ jobs:
           # the refreshed rate always lands on main and gets deployed.
           ref: main
 
-      - name: Fetch VND → TWD
+      - name: Fetch đồng rates
         run: |
           node - <<'EOF'
           const fs = require('fs');
+          const { CURRENCIES } = require('./parser.js');
           (async () => {
             const res = await fetch('https://open.er-api.com/v6/latest/VND');
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const json = await res.json();
-            const twdPerVnd = json.rates && json.rates.TWD;
-            if (!twdPerVnd) throw new Error('no TWD rate in response');
-            const vndPerTwd = Math.round((1 / twdPerVnd) * 10) / 10;
-            if (!(vndPerTwd > 100 && vndPerTwd < 100000)) throw new Error('implausible rate ' + vndPerTwd);
-            const current = JSON.parse(fs.readFileSync('rate.json', 'utf8'));
-            current.vndPerTwd = vndPerTwd;
-            current.asOf = new Date(json.time_last_update_unix * 1000).toISOString();
-            current.source = 'open.er-api.com';
-            fs.writeFileSync('rate.json', JSON.stringify(current, null, 2) + '\n');
-            console.log('vndPerTwd =', vndPerTwd);
+            const rates = json.rates || {};
+            const out = {};
+            for (const code of Object.keys(CURRENCIES)) {
+              const perDong = rates[code];
+              if (!(perDong > 0)) continue;
+              const vndPerUnit = Math.round((1 / perDong) * 100) / 100;
+              // A sane exchange rate, not a broken feed.
+              if (vndPerUnit > 0.5 && vndPerUnit < 5e6) out[code] = vndPerUnit;
+            }
+            if (Object.keys(out).length < 8) {
+              throw new Error('only got ' + Object.keys(out).length + ' usable rates');
+            }
+            const doc = JSON.parse(fs.readFileSync('rate.json', 'utf8'));
+            doc.vndPerUnit = out;
+            doc.asOf = new Date(json.time_last_update_unix * 1000).toISOString();
+            doc.source = 'open.er-api.com';
+            fs.writeFileSync('rate.json', JSON.stringify(doc, null, 2) + '\n');
+            console.log('rates:', Object.keys(out).length, '· TWD', out.TWD, '· USD', out.USD);
           })().catch((e) => { console.error(e); process.exit(1); });
           EOF
 
@@ -51,5 +60,5 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "chore: refresh bundled VND/TWD fallback rate"
+          git commit -am "chore: refresh the bundled đồng exchange rates"
           git push origin HEAD:main

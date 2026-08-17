@@ -456,14 +456,85 @@
     });
   }
 
+
+  /* ------------------------------------------------------------------ *
+   * money out
+   *
+   * The price read from a sign is always đồng. What it is shown as is the
+   * traveller's choice, and rates are stored as "đồng per one unit", which is
+   * the number people actually quote at an exchange counter.
+   * ------------------------------------------------------------------ */
+
+  const CURRENCIES = {
+    TWD: { symbol: 'NT$', name: 'New Taiwan dollar' },
+    USD: { symbol: '$', name: 'US dollar' },
+    EUR: { symbol: '€', name: 'Euro' },
+    GBP: { symbol: '£', name: 'Pound sterling' },
+    JPY: { symbol: '¥', name: 'Japanese yen' },
+    KRW: { symbol: '₩', name: 'Korean won' },
+    CNY: { symbol: 'CN¥', name: 'Chinese yuan' },
+    HKD: { symbol: 'HK$', name: 'Hong Kong dollar' },
+    SGD: { symbol: 'S$', name: 'Singapore dollar' },
+    MYR: { symbol: 'RM', name: 'Malaysian ringgit' },
+    THB: { symbol: '฿', name: 'Thai baht' },
+    PHP: { symbol: '₱', name: 'Philippine peso' },
+    IDR: { symbol: 'Rp', name: 'Indonesian rupiah' },
+    INR: { symbol: '₹', name: 'Indian rupee' },
+    AUD: { symbol: 'A$', name: 'Australian dollar' },
+    CAD: { symbol: 'C$', name: 'Canadian dollar' },
+  };
+
+  /**
+   * How finely to round, chosen from the size of the number so that a mode is
+   * never absurd: rounding 2.65 up to 3 loses too much, rounding 68.8 up to
+   * 68.81 gains nothing.
+   */
+  function roundingStep(value) {
+    const v = Math.abs(value);
+    if (v >= 10) return 1;
+    if (v >= 1) return 0.1;
+    return 0.01;
+  }
+
+  /** mode: 'up' | 'down' | anything else for nearest. */
+  function applyRounding(value, mode) {
+    const step = roundingStep(value);
+    const n = value / step;
+    const rounded = mode === 'up' ? Math.ceil(n) : mode === 'down' ? Math.floor(n) : Math.round(n);
+    // Re-round to kill the float dust that 0.1 steps leave behind.
+    return Math.round(rounded * step * 100) / 100;
+  }
+
+  /**
+   * Convert đồng to a currency.
+   *
+   * vndPerUnit is how many đồng one unit costs — the number on the board at the
+   * money changer — so a traveller can type in what they actually paid and see
+   * their true cost rather than a mid-market fiction.
+   */
+  function convert(vnd, vndPerUnit, mode) {
+    if (!(vndPerUnit > 0)) return null;
+    return applyRounding(vnd / vndPerUnit, mode);
+  }
+
+  function formatMoney(value, code) {
+    if (value == null || !Number.isFinite(value)) return '—';
+    const cur = CURRENCIES[code] || { symbol: code + ' ' };
+    const step = roundingStep(value);
+    const digits = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
+    const n = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value);
+    return cur.symbol + n;
+  }
+
   function formatVnd(v) {
     return new Intl.NumberFormat('vi-VN').format(Math.round(v)) + ' ₫';
   }
 
   function formatTwd(v) {
-    const abs = Math.abs(v);
-    const digits = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
-    return 'NT$' + new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v);
+    return formatMoney(v, 'TWD');
   }
 
   function toTwd(vnd, vndPerTwd) {
@@ -483,6 +554,11 @@
     formatVnd,
     formatTwd,
     toTwd,
+    CURRENCIES,
+    convert,
+    applyRounding,
+    roundingStep,
+    formatMoney,
     MIN_VND,
     MAX_VND,
   };

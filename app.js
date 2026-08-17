@@ -7,7 +7,8 @@
   'use strict';
 
   const VERSION = '1.0.0';
-  const RATE_KEY = 'vpc.rate';
+  const RATE_KEY = 'vpc.rates';
+  const MANUAL_KEY = 'vpc.manual';
   const OPTS_KEY = 'vpc.opts';
   const ENGINE_CACHE = 'vpc-engine-v2';
 
@@ -36,6 +37,8 @@
     netChip: $('netChip'), settingsBtn: $('settingsBtn'), settingsPanel: $('settingsPanel'),
     settingsClose: $('settingsClose'), rateDetail: $('rateDetail'), rateInput: $('rateInput'),
     rateRefresh: $('rateRefresh'), rateAuto: $('rateAuto'),
+    currencySelect: $('currencySelect'), rateUnit: $('rateUnit'),
+    roundBtns: Array.from(document.querySelectorAll('[data-round]')),
     optThousands: $('optThousands'), optDigits: $('optDigits'), optRaw: $('optRaw'),
     packStatus: $('packStatus'), packBtn: $('packBtn'), version: $('version'),
     toast: $('toast'),
@@ -67,8 +70,11 @@
     busy: false,
     live: false,
     liveTimer: null,
-    rate: null,          // { vndPerTwd, source, fetchedAt, manual }
-    fallbackRate: null,
+    rates: null,         // { values: { CODE: đồng per unit }, source, fetchedAt }
+    fallbackRates: null,
+    manual: {},          // per-currency overrides you typed in yourself
+    currency: 'TWD',
+    rounding: 'nearest', // 'up' | 'nearest' | 'down'
     opts: { thousands: true, digits: false, raw: false },
     packReady: false,
     coreUrl: CORE_SIMD,
@@ -129,20 +135,34 @@
    * exchange rate
    * ------------------------------------------------------------------ */
 
+  // Everything is stored as "đồng per one unit", because that is the number
+  // written on the board at a money changer.
   const RATE_SOURCES = [
     {
       name: 'exchangerate-api',
       url: 'https://open.er-api.com/v6/latest/VND',
-      read: (j) => (j && j.rates && j.rates.TWD ? 1 / j.rates.TWD : null),
+      read: (j) => (j && j.rates ? j.rates : null),
     },
     {
       name: 'currency-api',
       url: 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/vnd.min.json',
-      read: (j) => (j && j.vnd && j.vnd.twd ? 1 / j.vnd.twd : null),
+      read: (j) => (j && j.vnd ? j.vnd : null),
     },
   ];
 
-  async function fetchRate() {
+  /** Turn "units per đồng" into "đồng per unit" for the currencies on offer. */
+  function toVndPerUnit(perDong) {
+    const out = {};
+    for (const code of Object.keys(VPC.CURRENCIES)) {
+      const r = perDong[code] || perDong[code.toLowerCase()];
+      const v = r > 0 ? 1 / r : 0;
+      // Anything outside this range is a broken feed, not an exchange rate.
+      if (v > 0.5 && v < 5e6) out[code] = v;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  async function fetchRates() {
     for (const src of RATE_SOURCES) {
       try {
         const ctl = new AbortController();
@@ -150,67 +170,121 @@
         const res = await fetch(src.url, { signal: ctl.signal, cache: 'no-store' });
         clearTimeout(t);
         if (!res.ok) continue;
-        const vndPerTwd = src.read(await res.json());
-        if (vndPerTwd && vndPerTwd > 100 && vndPerTwd < 100000) {
-          return { vndPerTwd, source: src.name, fetchedAt: Date.now(), manual: false };
-        }
+        const values = toVndPerUnit(src.read(await res.json()) || {});
+        if (values) return { values, source: src.name, fetchedAt: Date.now() };
       } catch (e) { /* try the next source */ }
     }
     return null;
   }
 
-  async function loadFallbackRate() {
+  async function loadFallbackRates() {
     try {
       const res = await fetch('rate.json', { cache: 'no-cache' });
       const j = await res.json();
-      if (j && j.vndPerTwd) {
-        state.fallbackRate = {
-          vndPerTwd: j.vndPerTwd,
-          source: 'bundled ' + (j.asOf || '').slice(0, 10),
+      const values = j && (j.vndPerUnit || (j.vndPerTwd ? { TWD: j.vndPerTwd } : null));
+      if (values) {
+        state.fallbackRates = {
+          values,
+          source: 'bundled ' + String(j.asOf || '').slice(0, 10),
           fetchedAt: Date.parse(j.asOf) || Date.now(),
-          manual: false,
           bundled: true,
         };
       }
     } catch (e) { /* offline first run without the file cached */ }
   }
 
-  function applyRate(rate, persist) {
-    if (!rate) return;
-    state.rate = rate;
-    if (persist) saveJson(RATE_KEY, rate);
+  /** The rate in force for the chosen currency: yours if you set one. */
+  function vndPerUnit(code) {
+    const c = code || state.currency;
+    const manual = state.manual[c];
+    if (manual > 0) return manual;
+    return (state.rates && state.rates.values[c]) || 0;
+  }
+
+  function isManual(code) {
+    return (state.manual[code || state.currency] || 0) > 0;
+  }
+
+  function applyRates(rates, persist) {
+    if (!rates) return;
+    state.rates = rates;
+    if (persist) saveJson(RATE_KEY, rates);
     renderRate();
     rerenderLast();
   }
 
+  function setCurrency(code) {
+    if (!VPC.CURRENCIES[code]) return;
+    state.currency = code;
+    saveOpts();
+    renderRate();
+    rerenderLast();
+    renderHits();
+  }
+
+  function setRounding(mode) {
+    state.rounding = mode;
+    saveOpts();
+    for (const btn of el.roundBtns) {
+      btn.setAttribute('aria-pressed', String(btn.dataset.round === mode));
+    }
+    rerenderLast();
+    renderHits();
+  }
+
+  function setManualRate(code, value) {
+    if (value > 0) state.manual[code] = value;
+    else delete state.manual[code];
+    saveJson(MANUAL_KEY, state.manual);
+    renderRate();
+    rerenderLast();
+    renderHits();
+  }
+
+  /** Format an amount of đồng in the chosen currency, with rounding applied. */
+  function money(vnd) {
+    const converted = VPC.convert(vnd, vndPerUnit(), state.rounding);
+    return converted == null ? '—' : VPC.formatMoney(converted, state.currency);
+  }
+
   function renderRate() {
-    const r = state.rate;
-    if (!r) {
-      el.rateValue.textContent = 'no rate';
+    const code = state.currency;
+    const cur = VPC.CURRENCIES[code];
+    const rate = vndPerUnit(code);
+
+    if (!rate) {
+      el.rateValue.textContent = 'no ' + code + ' rate';
       el.rateAge.textContent = '';
       el.rateDetail.textContent = 'unavailable';
-      return;
+    } else {
+      el.rateValue.textContent = cur.symbol + '1 = ' + Math.round(rate).toLocaleString('en-US') + ' ₫';
+      el.rateAge.textContent = isManual(code)
+        ? 'yours'
+        : state.rates ? ago(state.rates.fetchedAt) : '';
+      el.rateDetail.textContent = isManual(code)
+        ? 'the rate you entered'
+        : (state.rates ? state.rates.source + ' · ' + ago(state.rates.fetchedAt) : 'unavailable');
     }
-    el.rateValue.textContent = 'NT$1 = ' + Math.round(r.vndPerTwd).toLocaleString('en-US') + ' ₫';
-    el.rateAge.textContent = r.manual ? 'manual' : ago(r.fetchedAt);
-    el.rateDetail.textContent = (r.manual ? 'set by you' : r.source) + ' · ' + ago(r.fetchedAt);
+
+    el.rateUnit.textContent = cur.symbol + '1 =';
     if (document.activeElement !== el.rateInput) {
-      el.rateInput.value = Math.round(r.vndPerTwd * 10) / 10;
+      el.rateInput.value = rate ? Math.round(rate * 100) / 100 : '';
     }
+    if (el.currencySelect.value !== code) el.currencySelect.value = code;
   }
 
   async function refreshRate(loud) {
     if (!navigator.onLine) {
-      if (loud) toast('No connection — keeping the saved rate');
+      if (loud) toast('No connection — keeping the saved rates');
       return;
     }
-    if (loud) toast('Fetching rate…', 1500);
-    const r = await fetchRate();
+    if (loud) toast('Fetching rates…', 1500);
+    const r = await fetchRates();
     if (r) {
-      const wasManual = state.rate && state.rate.manual;
-      if (wasManual && !loud) return; // don't stomp a manual override in the background
-      applyRate(r, true);
-      if (loud) toast('Rate updated');
+      applyRates(r, true);
+      if (loud) {
+        toast(isManual() ? 'Rates updated — yours still applies to ' + state.currency : 'Rates updated');
+      }
     } else if (loud) {
       toast('Could not reach the rate service');
     }
@@ -995,9 +1069,7 @@
       const label = document.createElement('span');
       label.className = 'hit-label';
       if (pos.top < 26) label.style.top = '2px';
-      label.textContent = state.rate
-        ? VPC.formatTwd(VPC.toTwd(c.vnd, state.rate.vndPerTwd))
-        : VPC.formatVnd(c.vnd);
+      label.textContent = vndPerUnit() ? money(c.vnd) : VPC.formatVnd(c.vnd);
       div.appendChild(label);
       div.addEventListener('click', (e) => { e.stopPropagation(); choose(i); });
       div.addEventListener('touchend', (e) => { e.stopPropagation(); e.preventDefault(); choose(i); });
@@ -1276,19 +1348,21 @@
       return;
     }
 
-    const rate = state.rate;
     const pick = Math.min(state.chosen || 0, ranked.length - 1);
     const best = ranked[pick];
     el.hero.hidden = false;
     el.resultActions.hidden = false;
     el.heroVnd.textContent = VPC.formatVnd(best.vnd);
-    el.heroTwd.textContent = rate ? VPC.formatTwd(VPC.toTwd(best.vnd, rate.vndPerTwd)) : '—';
+    el.heroTwd.textContent = money(best.vnd);
 
     el.heroFlags.innerHTML = '';
     if (best.assumed) addFlag('assumed ×1.000');
-    if (!rate) addFlag('no rate yet');
-    else if (rate.manual) addFlag('manual rate');
-    else if (Date.now() - rate.fetchedAt > 3 * 864e5) addFlag('rate ' + ago(rate.fetchedAt));
+    if (!vndPerUnit()) addFlag('no rate yet');
+    else if (isManual()) addFlag('your rate');
+    else if (state.rates && Date.now() - state.rates.fetchedAt > 3 * 864e5) {
+      addFlag('rate ' + ago(state.rates.fetchedAt));
+    }
+    if (state.rounding !== 'nearest') addFlag('rounded ' + state.rounding);
 
     // Every other reading stays one tap away — on a shelf full of barcodes the
     // ranking is a suggestion, not a verdict.
@@ -1299,7 +1373,7 @@
       li.tabIndex = 0;
       const twd = document.createElement('span');
       twd.className = 'm-twd';
-      twd.textContent = rate ? VPC.formatTwd(VPC.toTwd(c.vnd, rate.vndPerTwd)) : '—';
+      twd.textContent = money(c.vnd);
       const vnd = document.createElement('span');
       vnd.className = 'm-vnd';
       vnd.textContent = VPC.formatVnd(c.vnd) + (c.assumed ? ' *' : '');
@@ -1454,9 +1528,36 @@
    * settings
    * ------------------------------------------------------------------ */
 
+  /** Carry over the single-currency rate an earlier version saved. */
+  function migrateOldRate() {
+    const old = loadJson('vpc.rate');
+    if (!old || !old.vndPerTwd) return;
+    if (old.manual) state.manual.TWD = old.vndPerTwd;
+    else if (!loadJson(RATE_KEY)) {
+      saveJson(RATE_KEY, { values: { TWD: old.vndPerTwd }, source: old.source || 'saved', fetchedAt: old.fetchedAt || Date.now() });
+    }
+    saveJson(MANUAL_KEY, state.manual);
+    try { localStorage.removeItem('vpc.rate'); } catch (e) { /* private mode */ }
+  }
+
+  /** Fill the picker, marking which currencies actually have a rate. */
+  function buildCurrencyList() {
+    el.currencySelect.innerHTML = '';
+    for (const [code, cur] of Object.entries(VPC.CURRENCIES)) {
+      const known = (state.rates && state.rates.values[code]) || state.manual[code];
+      const o = document.createElement('option');
+      o.value = code;
+      o.textContent = code + ' · ' + cur.name + (known ? '' : ' (no rate yet)');
+      el.currencySelect.appendChild(o);
+    }
+    el.currencySelect.value = state.currency;
+  }
+
   function loadOpts() {
     const saved = loadJson(OPTS_KEY);
     if (saved) Object.assign(state.opts, saved);
+    if (saved && VPC.CURRENCIES[saved.currency]) state.currency = saved.currency;
+    if (saved && ['up', 'down', 'nearest'].includes(saved.rounding)) state.rounding = saved.rounding;
     el.optThousands.checked = state.opts.thousands;
     el.optDigits.checked = state.opts.digits;
     el.optRaw.checked = state.opts.raw;
@@ -1464,7 +1565,10 @@
   }
 
   function saveOpts() {
-    saveJson(OPTS_KEY, state.opts);
+    saveJson(OPTS_KEY, Object.assign({}, state.opts, {
+      currency: state.currency,
+      rounding: state.rounding,
+    }));
   }
 
   function openSettings() {
@@ -1525,18 +1629,21 @@
 
     el.rateRefresh.addEventListener('click', () => refreshRate(true));
     el.rateAuto.addEventListener('click', async () => {
-      const cached = loadJson(RATE_KEY);
-      if (cached && !cached.manual) applyRate(cached, true);
-      else if (state.fallbackRate) applyRate(state.fallbackRate, true);
+      setManualRate(state.currency, 0);
+      toast('Back to the published rate for ' + state.currency);
       await refreshRate(true);
     });
     el.rateInput.addEventListener('change', () => {
       const v = parseFloat(el.rateInput.value);
       if (v > 0) {
-        applyRate({ vndPerTwd: v, source: 'manual', fetchedAt: Date.now(), manual: true }, true);
-        toast('Using your rate');
+        setManualRate(state.currency, v);
+        toast('Using your ' + state.currency + ' rate');
       }
     });
+    el.currencySelect.addEventListener('change', () => setCurrency(el.currencySelect.value));
+    for (const btn of el.roundBtns) {
+      btn.addEventListener('click', () => setRounding(btn.dataset.round));
+    }
 
     el.optThousands.addEventListener('change', () => {
       state.opts.thousands = el.optThousands.checked;
@@ -1672,14 +1779,18 @@
     hadController = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
     registerSW();
 
+    state.manual = loadJson(MANUAL_KEY) || {};
+    migrateOldRate();
     const cached = loadJson(RATE_KEY);
-    if (cached && cached.vndPerTwd) applyRate(cached, false);
-    await loadFallbackRate();
-    if (!state.rate && state.fallbackRate) applyRate(state.fallbackRate, false);
+    if (cached && cached.values) applyRates(cached, false);
+    await loadFallbackRates();
+    if (!state.rates && state.fallbackRates) applyRates(state.fallbackRates, false);
+    buildCurrencyList();
+    setRounding(state.rounding);
     renderRate();
 
-    // A rate older than six hours is worth a quiet refresh.
-    if (!state.rate || Date.now() - state.rate.fetchedAt > 6 * 3600e3) refreshRate(false);
+    // Rates older than six hours are worth a quiet refresh.
+    if (!state.rates || Date.now() - state.rates.fetchedAt > 6 * 3600e3) refreshRate(false);
 
     setStatus('Getting the camera ready…');
     const packPromise = ensurePack(false);
