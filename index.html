@@ -39,9 +39,24 @@
   <main id="stage">
     <video id="cam" playsinline webkit-playsinline muted autoplay disablepictureinpicture></video>
 
+    <canvas id="still" hidden></canvas>
+
     <div id="guideWrap" aria-hidden="true">
       <div id="guide"></div>
-      <p id="guideHint">Fill the box with the price</p>
+    </div>
+
+    <!-- Drawn over the frozen still: the box you drag, and a tappable marker
+         on every number that was found. -->
+    <div id="selectLayer" hidden>
+      <div id="selectBox" hidden></div>
+      <div id="hits"></div>
+    </div>
+
+    <p id="guideHint">Fill the box with the price</p>
+
+    <div id="frozenBar" hidden>
+      <button id="retakeBtn" class="pill" type="button">↺ Retake</button>
+      <span id="frozenHint" class="pill pill-quiet">Drag across the price</span>
     </div>
 
     <div id="camGate">
@@ -83,6 +98,10 @@
     </div>
 
     <ul id="more" class="more"></ul>
+
+    <div id="resultActions" class="result-actions" hidden>
+      <button id="reportBtn" class="btn btn-small btn-ghost" type="button">Wrong? Report it</button>
+    </div>
 
     <details id="rawWrap" hidden>
       <summary>What the camera read</summary>

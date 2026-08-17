@@ -77,7 +77,13 @@ const ctx = await browser.newContext({
 const page = await ctx.newPage();
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
-page.on('console', (m) => { if (m.type() === 'error') pageErrors.push('console: ' + m.text()); });
+page.on('console', (m) => {
+  // The offline section deliberately cuts the network, and a failed request is
+  // the expected result of that; offline behaviour is asserted on its own.
+  if (m.type() !== 'error') return;
+  if (/ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|Failed to load resource/.test(m.text())) return;
+  pageErrors.push('console: ' + m.text());
+});
 
 await page.goto(BASE, { waitUntil: 'load' });
 await page.waitForFunction(() => window.__vpcReady === true, null, { timeout: 180000 });
@@ -172,6 +178,92 @@ await check('the camera stream starts', async () => {
   });
   assert(live, 'video has no dimensions');
 });
+
+// ---------------------------------------------------------------------------
+// Freeze, highlight, and pick — the barcode problem
+// ---------------------------------------------------------------------------
+
+if (SAMPLE) {
+  const MENU = path.join(FIXTURES, 'menu_printed.jpg');
+  const hasMenu = fs.existsSync(MENU);
+
+  await check('a picked photo freezes so it can be highlighted', async () => {
+    await page.evaluate(() => { window.__vpcLast = null; });
+    await page.setInputFiles('#fileInput', hasMenu ? MENU : SAMPLE);
+    await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+    assert(!(await page.isHidden('#still')), 'the still is not shown');
+    assert(!(await page.isHidden('#selectLayer')), 'the select layer is not shown');
+    assert(!(await page.isHidden('#frozenBar')), 'the retake bar is not shown');
+  });
+
+  await check('every reading gets a tappable marker on the image', async () => {
+    const n = await page.evaluate(() => document.querySelectorAll('#hits .hit').length);
+    const found = (await page.evaluate(() => window.__vpcLast.ranked.length));
+    assert(n > 0, 'no markers drawn for ' + found + ' readings');
+  });
+
+  if (hasMenu) {
+    await check('tapping another reading promotes it to the answer', async () => {
+      const before = (await page.textContent('#heroVnd')).replace(/\D/g, '');
+      const rows = await page.$$('#more li');
+      assert(rows.length > 0, 'no alternatives listed');
+      // Read the đồng column only — the row also carries the NT$ figure.
+      const alt = (await rows[0].$eval('.m-vnd', (n) => n.textContent)).replace(/\D/g, '');
+      await rows[0].click();
+      await page.waitForTimeout(150);
+      const after = (await page.textContent('#heroVnd')).replace(/\D/g, '');
+      assert(after !== before, 'the headline did not change');
+      assert(after === alt, 'tapped ' + alt + ' but the headline shows ' + after);
+    });
+
+    await check('dragging across one price reads only that price', async () => {
+      // Take the box of a reading the app found, and drag over it.
+      const target = await page.evaluate(() => {
+        const c = window.__vpcLast.ranked.find((r) => r.box);
+        if (!c) return null;
+        const layer = document.getElementById('selectLayer').getBoundingClientRect();
+        const still = document.getElementById('still');
+        const r = still.getBoundingClientRect();
+        const iw = still.width, ih = still.height;
+        const scale = Math.min(r.width / iw, r.height / ih);
+        const ox = r.left + (r.width - iw * scale) / 2;
+        const oy = r.top + (r.height - ih * scale) / 2;
+        return {
+          vnd: c.vnd,
+          x0: ox + c.box.sx * scale - layer.left,
+          y0: oy + c.box.sy * scale - layer.top,
+          x1: ox + (c.box.sx + c.box.sw) * scale - layer.left,
+          y1: oy + (c.box.sy + c.box.sh) * scale - layer.top,
+          left: layer.left, top: layer.top,
+        };
+      });
+      assert(target, 'no reading carried a box');
+
+      await page.evaluate(() => { window.__vpcLast = null; });
+      await page.mouse.move(target.left + target.x0 - 6, target.top + (target.y0 + target.y1) / 2);
+      await page.mouse.down();
+      await page.mouse.move(target.left + target.x1 + 6, target.top + (target.y0 + target.y1) / 2, { steps: 12 });
+      await page.mouse.up();
+      await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+
+      const r = await page.evaluate(() => window.__vpcLast);
+      assert(r.ranked.length > 0, 'the selection produced nothing');
+      assert(r.ranked.some((c) => c.vnd === target.vnd),
+        'expected ' + target.vnd + ' in ' + JSON.stringify(r.ranked.map((c) => c.vnd)));
+      // The point of highlighting: the other prices on the menu are gone.
+      assert(r.ranked.length < 4, 'the selection still picked up ' + r.ranked.length + ' readings');
+    });
+
+    await page.screenshot({ path: path.join(SHOTS, '05-highlight.png') });
+  }
+
+  await check('retake returns to the live camera', async () => {
+    await page.click('#retakeBtn');
+    await page.waitForTimeout(400);
+    assert(await page.isHidden('#still'), 'the still is still showing');
+    assert(await page.isHidden('#selectLayer'), 'the select layer is still showing');
+  });
+}
 
 await page.screenshot({ path: path.join(SHOTS, '01-main.png') });
 await page.click('#settingsBtn');

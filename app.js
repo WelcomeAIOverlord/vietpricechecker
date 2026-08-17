@@ -36,6 +36,10 @@
     optThousands: $('optThousands'), optDigits: $('optDigits'), optRaw: $('optRaw'),
     packStatus: $('packStatus'), packBtn: $('packBtn'), version: $('version'),
     toast: $('toast'),
+    still: $('still'), selectLayer: $('selectLayer'), selectBox: $('selectBox'),
+    hits: $('hits'), frozenBar: $('frozenBar'), frozenHint: $('frozenHint'),
+    retakeBtn: $('retakeBtn'), guideWrap: $('guideWrap'),
+    resultActions: $('resultActions'), reportBtn: $('reportBtn'),
   };
 
   // Hooks the browser tests read. Harmless in production: a boolean and the
@@ -57,6 +61,10 @@
     opts: { thousands: true, digits: false, raw: false },
     packReady: false,
     coreUrl: CORE_SIMD,
+    // The frozen frame the user drags on, and where it sits on screen.
+    frozen: null,     // { canvas, w, h }
+    frozenFit: null,  // { x, y, w, h } of the image inside #stage
+    chosen: null,     // index into the ranked list the user tapped
   };
 
   /* ------------------------------------------------------------------ *
@@ -453,7 +461,9 @@
       px[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
-    return { canvas, grey, w, h, inverted };
+    // Everything needed to map a recognised line back onto the source image.
+    const origin = { sx, sy, scale, pad: MARGIN };
+    return { canvas, grey, w, h, inverted, origin };
   }
 
   /**
@@ -497,9 +507,11 @@
     return canvas;
   }
 
+  const MARGIN = 24;
+
   /** Pad the image with white so Tesseract does not clip glyphs at the edge. */
   function withMargin(canvas, margin) {
-    const m = margin || 24;
+    const m = margin || MARGIN;
     const out = document.createElement('canvas');
     out.width = canvas.width + m * 2;
     out.height = canvas.height + m * 2;
@@ -519,6 +531,239 @@
       }
     }
     return out;
+  }
+
+
+  /* ------------------------------------------------------------------ *
+   * freeze, then highlight
+   *
+   * Framing a price and holding the phone still are two hard things at once.
+   * The shutter freezes a full-resolution frame, and everything after that
+   * happens on a still image: drag across the price to scan exactly that
+   * region, which is also the only reliable way to exclude a barcode sitting
+   * next to it.
+   * ------------------------------------------------------------------ */
+
+  /** Copy the current video frame at full sensor resolution. */
+  function grabFrame() {
+    const vw = el.cam.videoWidth;
+    const vh = el.cam.videoHeight;
+    if (!vw || !vh) throw new Error('camera not ready yet');
+    const canvas = document.createElement('canvas');
+    canvas.width = vw;
+    canvas.height = vh;
+    canvas.getContext('2d').drawImage(el.cam, 0, 0);
+    return { canvas, w: vw, h: vh };
+  }
+
+  /** Show a frozen frame and switch the stage into selection mode. */
+  function freeze(frame) {
+    state.frozen = frame;
+    const ctx = el.still.getContext('2d');
+    el.still.width = frame.w;
+    el.still.height = frame.h;
+    ctx.drawImage(frame.canvas, 0, 0);
+
+    el.still.hidden = false;
+    el.selectLayer.hidden = false;
+    el.frozenBar.hidden = false;
+    el.guideWrap.hidden = true;
+    el.guideHint.textContent = '';
+    stopCamera();
+    layoutFrozen();
+  }
+
+  function unfreeze() {
+    state.frozen = null;
+    state.frozenFit = null;
+    el.still.hidden = true;
+    el.selectLayer.hidden = true;
+    el.frozenBar.hidden = true;
+    el.selectBox.hidden = true;
+    el.hits.innerHTML = '';
+    el.guideWrap.hidden = false;
+    el.guideHint.textContent = state.live
+      ? 'Scanning continuously — tap “live” to stop'
+      : 'Fill the box with the price';
+    if (!state.stream) startCamera();
+  }
+
+  /**
+   * Where the frozen image actually sits inside the stage. The canvas is
+   * object-fit: contain, so it is letterboxed, and every screen coordinate has
+   * to be mapped through this to reach image pixels.
+   */
+  function layoutFrozen() {
+    if (!state.frozen) return;
+    const r = el.still.getBoundingClientRect();
+    const { w, h } = state.frozen;
+    const scale = Math.min(r.width / w, r.height / h);
+    const dw = w * scale;
+    const dh = h * scale;
+    state.frozenFit = {
+      x: r.left + (r.width - dw) / 2,
+      y: r.top + (r.height - dh) / 2,
+      w: dw,
+      h: dh,
+      scale,
+    };
+  }
+
+  function screenToImage(clientX, clientY) {
+    const f = state.frozenFit;
+    if (!f) return { x: 0, y: 0 };
+    return {
+      x: Math.max(0, Math.min(state.frozen.w, (clientX - f.x) / f.scale)),
+      y: Math.max(0, Math.min(state.frozen.h, (clientY - f.y) / f.scale)),
+    };
+  }
+
+  function imageRectToScreen(box) {
+    const f = state.frozenFit;
+    const stage = el.selectLayer.getBoundingClientRect();
+    return {
+      left: f.x - stage.left + box.sx * f.scale,
+      top: f.y - stage.top + box.sy * f.scale,
+      width: box.sw * f.scale,
+      height: box.sh * f.scale,
+    };
+  }
+
+  /**
+   * Turn a drag into a crop. A deliberate rectangle is used as drawn; a quick
+   * horizontal swipe across a line of text is barely any height at all, so it
+   * is grown into a band tall enough to hold the digits it crossed.
+   */
+  function dragToCrop(a, b) {
+    const sx = Math.min(a.x, b.x);
+    const sy = Math.min(a.y, b.y);
+    let sw = Math.abs(b.x - a.x);
+    let sh = Math.abs(b.y - a.y);
+
+    const MIN_BAND = state.frozen.h * 0.045;
+    let top = sy;
+    if (sh < MIN_BAND) {
+      // A swipe: centre a band on the line the finger travelled along.
+      const band = Math.max(MIN_BAND, sw * 0.28);
+      top = sy + sh / 2 - band / 2;
+      sh = band;
+    }
+
+    // A little margin on each side keeps Tesseract from clipping the glyphs.
+    const padX = Math.max(8, sw * 0.04);
+    const padY = Math.max(8, sh * 0.18);
+    const x0 = Math.max(0, sx - padX);
+    const y0 = Math.max(0, top - padY);
+    return {
+      sx: x0,
+      sy: y0,
+      sw: Math.min(state.frozen.w - x0, sw + padX * 2),
+      sh: Math.min(state.frozen.h - y0, sh + padY * 2),
+    };
+  }
+
+  function wireSelection() {
+    let start = null;
+    let moved = false;
+
+    const down = (e) => {
+      if (!state.frozen || state.busy) return;
+      const t = e.touches ? e.touches[0] : e;
+      layoutFrozen();
+      start = screenToImage(t.clientX, t.clientY);
+      moved = false;
+      el.hits.innerHTML = '';
+      el.selectBox.hidden = false;
+      Object.assign(el.selectBox.style, { left: '0px', top: '0px', width: '0px', height: '0px' });
+      e.preventDefault();
+    };
+
+    const move = (e) => {
+      if (!start) return;
+      const t = e.touches ? e.touches[0] : e;
+      const now = screenToImage(t.clientX, t.clientY);
+      moved = Math.abs(now.x - start.x) > 6 || Math.abs(now.y - start.y) > 6;
+      const box = {
+        sx: Math.min(start.x, now.x),
+        sy: Math.min(start.y, now.y),
+        sw: Math.abs(now.x - start.x),
+        sh: Math.abs(now.y - start.y),
+      };
+      const r = imageRectToScreen(box);
+      Object.assign(el.selectBox.style, {
+        left: r.left + 'px', top: r.top + 'px',
+        width: r.width + 'px', height: r.height + 'px',
+      });
+      e.preventDefault();
+    };
+
+    const up = (e) => {
+      if (!start) return;
+      const t = (e.changedTouches && e.changedTouches[0]) || e;
+      const end = screenToImage(t.clientX, t.clientY);
+      const from = start;
+      start = null;
+      if (!moved) {
+        el.selectBox.hidden = true;
+        return; // a tap, not a drag — leave the last result alone
+      }
+      const crop = dragToCrop(from, end);
+      const r = imageRectToScreen(crop);
+      Object.assign(el.selectBox.style, {
+        left: r.left + 'px', top: r.top + 'px',
+        width: r.width + 'px', height: r.height + 'px',
+      });
+      el.frozenHint.textContent = 'Reading your selection…';
+      scanFrozen(crop);
+    };
+
+    el.selectLayer.addEventListener('touchstart', down, { passive: false });
+    el.selectLayer.addEventListener('touchmove', move, { passive: false });
+    el.selectLayer.addEventListener('touchend', up);
+    el.selectLayer.addEventListener('mousedown', down);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('resize', () => { layoutFrozen(); renderHits(); });
+  }
+
+  /** Draw a tappable marker over every number the scan found. */
+  function renderHits(result) {
+    el.hits.innerHTML = '';
+    const r = result || lastResults;
+    if (!r || !state.frozen || !r.ranked) return;
+    // The results sheet grows when an answer appears, which resizes the stage,
+    // so the image has to be re-measured before anything is drawn over it.
+    layoutFrozen();
+
+    r.ranked.forEach((c, i) => {
+      if (!c.box) return;
+      const pos = imageRectToScreen(c.box);
+      if (!(pos.width > 4 && pos.height > 4)) return;
+      const div = document.createElement('div');
+      div.className = 'hit' + (i === (state.chosen || 0) ? ' chosen' : '');
+      Object.assign(div.style, {
+        left: pos.left + 'px', top: pos.top + 'px',
+        width: pos.width + 'px', height: pos.height + 'px',
+      });
+      const label = document.createElement('span');
+      label.className = 'hit-label';
+      if (pos.top < 26) label.style.top = '2px';
+      label.textContent = state.rate
+        ? VPC.formatTwd(VPC.toTwd(c.vnd, state.rate.vndPerTwd))
+        : VPC.formatVnd(c.vnd);
+      div.appendChild(label);
+      div.addEventListener('click', (e) => { e.stopPropagation(); choose(i); });
+      div.addEventListener('touchend', (e) => { e.stopPropagation(); e.preventDefault(); choose(i); });
+      el.hits.appendChild(div);
+    });
+  }
+
+  /** Promote one candidate to the headline answer. */
+  function choose(index) {
+    if (!lastResults || !lastResults.ranked[index]) return;
+    state.chosen = index;
+    renderResults(lastResults, lastResults.ms || 0);
+    renderHits();
   }
 
   /* ------------------------------------------------------------------ *
@@ -544,7 +789,7 @@
   // convincing (grouped thousands, or a k/triệu/₫ marker), so stop early.
   const CONFIDENT = 6;
 
-  function collectCandidates(data, pass, out) {
+  function collectCandidates(data, pass, out, origin) {
     const lines = flattenLines(data);
     const heights = lines.map((l) => (l.bbox ? l.bbox.y1 - l.bbox.y0 : 0));
     const maxH = Math.max(1, ...heights);
@@ -561,6 +806,15 @@
         c.order = i;
         c.pass = pass.id;
         c.source = text;
+        // Map the line back to the frozen image so it can be drawn and tapped.
+        if (origin && line.bbox) {
+          c.box = {
+            sx: origin.sx + (line.bbox.x0 - origin.pad) / origin.scale,
+            sy: origin.sy + (line.bbox.y0 - origin.pad) / origin.scale,
+            sw: (line.bbox.x1 - line.bbox.x0) / origin.scale,
+            sh: (line.bbox.y1 - line.bbox.y0) / origin.scale,
+          };
+        }
         out.push(c);
       }
     });
@@ -610,7 +864,7 @@
       }
       passesRun.push(pass.id);
       if (data.text && data.text.trim()) texts.push(data.text.trim());
-      collectCandidates(data, pass, candidates);
+      collectCandidates(data, pass, candidates, prep.origin);
 
       const ranked = VPC.rank(candidates.slice());
       const goodEnough = ranked.length && ranked[0].score >= CONFIDENT && !ranked[0].assumed;
@@ -672,7 +926,17 @@
     return prepareCanvas(el.cam, vw, vh, guideCrop(vw, vh));
   }
 
+  /**
+   * Tapping the shutter freezes the frame and reads the guide box, so a plain
+   * tap still works exactly as before. The still stays on screen afterwards so
+   * the price can be highlighted directly if that first read was not it.
+   */
   function scanNow() {
+    if (state.frozen) {
+      // Already frozen: re-read the guide-box area of the still.
+      scanFrozen(guideCropOn(state.frozen));
+      return;
+    }
     if (!state.stream) {
       toast('Camera is off — use the photo button');
       return;
@@ -680,22 +944,73 @@
     el.shotFlash.classList.remove('on');
     void el.shotFlash.offsetWidth;
     el.shotFlash.classList.add('on');
-    runScan(async () => captureFromVideo(), 'tap');
+
+    let frame;
+    try {
+      frame = grabFrame();
+    } catch (err) {
+      setStatus('Camera is not ready yet — give it a moment.', true);
+      return;
+    }
+    const crop = guideCrop(frame.w, frame.h);
+    freeze(frame);
+    scanFrozen(crop);
   }
 
+  /** The guide box mapped onto a frozen frame rather than the live video. */
+  function guideCropOn(frame) {
+    const inset = 0.09;
+    return {
+      sx: frame.w * inset,
+      sy: frame.h * 0.33,
+      sw: frame.w * (1 - inset * 2),
+      sh: frame.h * 0.34,
+    };
+  }
+
+  /** Read one region of the frozen still. */
+  function scanFrozen(crop) {
+    state.chosen = null;
+    runScan(async () => prepareCanvas(state.frozen.canvas, state.frozen.w, state.frozen.h, crop), 'tap')
+      .then((result) => {
+        if (!state.frozen) return;
+        el.frozenHint.textContent = result && result.ranked.length
+          ? 'Tap a number, or drag again'
+          : 'Drag across just the price';
+        renderHits(result);
+      });
+  }
+
+  /**
+   * A picked photo is frozen exactly like a captured frame, so the whole image
+   * is read first and the price can then be highlighted if that is not enough.
+   */
   function scanFile(file) {
-    // A picked photo was framed deliberately and there is no live preview to
-    // keep responsive, so it always gets the full multi-pass treatment.
-    runScan(() => new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        resolve(prepareCanvas(img, img.naturalWidth, img.naturalHeight, null));
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('could not open that image')); };
-      img.src = url;
-    }), 'file');
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      freeze({ canvas, w: canvas.width, h: canvas.height });
+
+      state.chosen = null;
+      runScan(async () => prepareCanvas(canvas, canvas.width, canvas.height, null), 'file')
+        .then((result) => {
+          if (!state.frozen) return;
+          el.frozenHint.textContent = result && result.ranked.length
+            ? 'Tap a number, or drag across the right one'
+            : 'Drag across just the price';
+          renderHits(result);
+        });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      setStatus('Could not open that image.', true);
+    };
+    img.src = url;
   }
 
   /* ------------------------------------------------------------------ *
@@ -710,13 +1025,18 @@
     if (!ranked.length) {
       el.hero.hidden = true;
       el.more.innerHTML = '';
-      setStatus('No price found. Fill the box with the number, hold steady, and try again.', true);
+      el.resultActions.hidden = !state.frozen;
+      setStatus(state.frozen
+        ? 'No price found there. Drag across just the number and it will try again.'
+        : 'No price found. Fill the box with the number and try again.', true);
       return;
     }
 
     const rate = state.rate;
-    const best = ranked[0];
+    const pick = Math.min(state.chosen || 0, ranked.length - 1);
+    const best = ranked[pick];
     el.hero.hidden = false;
+    el.resultActions.hidden = false;
     el.heroVnd.textContent = VPC.formatVnd(best.vnd);
     el.heroTwd.textContent = rate ? VPC.formatTwd(VPC.toTwd(best.vnd, rate.vndPerTwd)) : '—';
 
@@ -726,9 +1046,13 @@
     else if (rate.manual) addFlag('manual rate');
     else if (Date.now() - rate.fetchedAt > 3 * 864e5) addFlag('rate ' + ago(rate.fetchedAt));
 
+    // Every other reading stays one tap away — on a shelf full of barcodes the
+    // ranking is a suggestion, not a verdict.
     el.more.innerHTML = '';
-    for (const c of ranked.slice(1, 7)) {
+    ranked.forEach((c, i) => {
+      if (i === pick) return;
       const li = document.createElement('li');
+      li.tabIndex = 0;
       const twd = document.createElement('span');
       twd.className = 'm-twd';
       twd.textContent = rate ? VPC.formatTwd(VPC.toTwd(c.vnd, rate.vndPerTwd)) : '—';
@@ -736,10 +1060,12 @@
       vnd.className = 'm-vnd';
       vnd.textContent = VPC.formatVnd(c.vnd) + (c.assumed ? ' *' : '');
       li.append(twd, vnd);
+      li.addEventListener('click', () => choose(i));
+      li.addEventListener('keydown', (e) => { if (e.key === 'Enter') choose(i); });
       el.more.appendChild(li);
-    }
+    });
 
-    const extra = ranked.length > 1 ? ' · ' + (ranked.length - 1) + ' more' : '';
+    const extra = ranked.length > 1 ? ' · tap another of ' + (ranked.length - 1) : '';
     const hard = result.passes && result.passes.length > 1 ? ' · ' + result.passes.length + ' passes' : '';
     setStatus('Read in ' + (ms / 1000).toFixed(1) + 's' + extra + hard);
   }
@@ -760,6 +1086,7 @@
    * ------------------------------------------------------------------ */
 
   function setLive(on) {
+    if (on && state.frozen) unfreeze();
     state.live = on;
     el.liveBtn.setAttribute('aria-pressed', String(on));
     clearTimeout(state.liveTimer);
@@ -773,7 +1100,7 @@
 
   async function liveTick() {
     if (!state.live) return;
-    if (state.stream && !state.busy && document.visibilityState === 'visible') {
+    if (state.stream && !state.frozen && !state.busy && document.visibilityState === 'visible') {
       await runScan(async () => captureFromVideo(), 'live');
     }
     if (state.live) state.liveTimer = setTimeout(liveTick, 900);
@@ -791,6 +1118,7 @@
       el.more.innerHTML = '';
       return;
     }
+    state.chosen = null;
     lastResults = { ranked, text };
     renderResults(lastResults, 0);
     setStatus('Typed in');
@@ -824,6 +1152,8 @@
 
   function wire() {
     el.shutter.addEventListener('click', scanNow);
+    el.retakeBtn.addEventListener('click', unfreeze);
+    wireSelection();
     el.camStart.addEventListener('click', startCamera);
     el.liveBtn.addEventListener('click', () => setLive(!state.live));
 
