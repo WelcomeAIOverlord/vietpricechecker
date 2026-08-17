@@ -13,9 +13,11 @@ server.
 
 1. Open the link above **in Safari** (not Chrome — only Safari can install a
    web app on iOS).
-2. Wait a few seconds on first open. It downloads a ~6 MB recognition engine
-   once and stores it on the phone. The Settings panel shows `ready · works
-   offline` when that has finished.
+2. Wait on first open while it downloads the recognition engine — 5.8 MB, once,
+   ever. It shows the megabytes as they arrive, and finished files are kept, so
+   if the connection drops you can reconnect and it picks up where it stopped
+   rather than starting over. Settings shows `ready · works offline` when done.
+   **Do this on wifi before you travel.**
 3. Tap the **Share** button, then **Add to Home Screen**, then **Add**.
 4. Open it from the home-screen icon. Allow camera access when asked.
 

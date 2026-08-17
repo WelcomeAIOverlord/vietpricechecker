@@ -424,6 +424,45 @@ await check('no absolute paths that would break on a project page', async () => 
 // on a server being reachable.
 // ---------------------------------------------------------------------------
 
+await check('the first-run download reports real progress and resumes', async () => {
+  // A fresh profile so the engine is fetched from scratch and watched.
+  const fresh = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+  });
+  const p2 = await fresh.newPage();
+
+  try {
+    await p2.goto(BASE, { waitUntil: 'load' });
+    await p2.waitForFunction(() => window.__vpcReady === true, null, { timeout: 180000 });
+
+    const log = await p2.evaluate(() => window.__vpcPackLog || []);
+    assert(log.length > 1, 'no byte progress was recorded: ' + JSON.stringify(log));
+    assert(log[log.length - 1] > log[0], 'progress never moved: ' + JSON.stringify(log.slice(0, 5)));
+    assert(log[log.length - 1] > 4_000_000, 'only saw ' + log[log.length - 1] + ' bytes');
+    const status = await p2.textContent('#packStatus');
+    assert(/works offline|ready/i.test(status), 'ended on: ' + status);
+
+    // Losing one file must not cost the whole download again.
+    const before = await p2.evaluate(async () => {
+      const k = (await caches.keys()).find((n) => n.startsWith('vpc-engine-'));
+      const c = await caches.open(k);
+      const keys = await c.keys();
+      const victim = keys.find((r) => r.url.includes('traineddata'));
+      await c.delete(victim);
+      return (await c.keys()).length;
+    });
+    await p2.reload({ waitUntil: 'load' });
+    await p2.waitForFunction(() => window.__vpcReady === true, null, { timeout: 180000 });
+    const after = await p2.evaluate(async () => {
+      const k = (await caches.keys()).find((n) => n.startsWith('vpc-engine-'));
+      return (await (await caches.open(k)).keys()).length;
+    });
+    assert(after === before + 1, `expected the missing file to be refetched, ${before} -> ${after}`);
+  } finally {
+    await fresh.close();
+  }
+});
+
 await check('scanning never talks to any server', async () => {
   const calls = [];
   const watch = (r) => {

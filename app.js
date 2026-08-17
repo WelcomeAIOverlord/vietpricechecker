@@ -52,6 +52,7 @@
   // last scan result, nothing that changes behaviour.
   window.__vpcReady = false;
   window.__vpcLast = null;
+  window.__vpcPackLog = [];
 
   let hadController = false;
 
@@ -227,6 +228,40 @@
     return [state.coreUrl, WORKER_JS, TRAINEDDATA];
   }
 
+  // Roughly what each file weighs, used only to show sensible progress before
+  // the server has told us anything. Being a little off is harmless.
+  const ENGINE_BYTES = { core: 3938657, worker: 123724, traineddata: 1976314 };
+  const ENGINE_TOTAL = ENGINE_BYTES.core + ENGINE_BYTES.worker + ENGINE_BYTES.traineddata;
+
+  const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+
+  /**
+   * Fetch one engine file, reporting bytes as they arrive.
+   *
+   * This is the only moment the app needs a connection, and on mobile data in
+   * a market it is a slow one. "1 of 3" for four megabytes looks like a hang;
+   * a moving byte count does not.
+   */
+  async function fetchWithProgress(url, onBytes) {
+    const res = await fetch(url, { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.body || !res.body.getReader) return res; // no streams: no progress
+
+    const reader = res.body.getReader();
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      onBytes(got);
+    }
+    // Rebuild the response with its original headers so the cached copy is
+    // served with the right content type.
+    return new Response(new Blob(chunks), { status: 200, headers: res.headers });
+  }
+
   async function packPresent() {
     if (!('caches' in window)) return false;
     try {
@@ -261,22 +296,37 @@
       return true;
     }
     const paths = enginePaths();
-    let done = 0;
+    let carried = 0; // bytes from files already finished this run
 
     for (const p of paths) {
       const url = abs(p);
-      if (await cache.match(url)) { done++; continue; }
-      el.packStatus.textContent = 'downloading ' + (done + 1) + '/' + paths.length + '…';
-      if (loud) setStatus('Saving the offline scanner… ' + (done + 1) + '/' + paths.length);
+      const weight = p === WORKER_JS ? ENGINE_BYTES.worker
+        : p === TRAINEDDATA ? ENGINE_BYTES.traineddata
+          : ENGINE_BYTES.core;
+
+      if (await cache.match(url)) { carried += weight; continue; }
+
+      const report = (bytes) => {
+        const soFar = Math.min(carried + bytes, ENGINE_TOTAL);
+        const pct = Math.min(99, Math.round((soFar / ENGINE_TOTAL) * 100));
+        const line = mb(soFar) + ' of ' + mb(ENGINE_TOTAL) + ' · ' + pct + '%';
+        el.packStatus.textContent = line;
+        window.__vpcPackLog.push(soFar);
+        if (loud) setStatus('Saving the offline scanner so it works with no signal… ' + line);
+      };
+      report(0);
+
       try {
-        const res = await fetch(url, { cache: 'no-cache' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        await cache.put(url, res.clone());
-        done++;
+        const res = await fetchWithProgress(url, report);
+        await cache.put(url, res);
+        carried += weight;
       } catch (e) {
         el.packBtn.disabled = false;
-        el.packStatus.textContent = 'incomplete — tap to retry';
-        if (loud) setStatus('Could not finish the offline download. Reconnect and retry.', true);
+        el.packStatus.textContent = 'stopped at ' + mb(carried) + ' — tap to resume';
+        if (loud) {
+          setStatus('The download stopped partway. Finished files are kept, so ' +
+            'reconnecting and tapping again picks up where it left off.', true);
+        }
         return false;
       }
     }
