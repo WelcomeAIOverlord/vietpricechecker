@@ -190,6 +190,52 @@ def scene_handwritten(lines, bg, fg, rng, jitter=1.0):
     return marker_stroke(out, rng)
 
 
+def draw_price_with_superscript_dong(d, xy, price, size, fg, font_path=None):
+    """Draw "25.000" followed by a small raised đ, the way menus print it."""
+    font = ImageFont.truetype(font_path or PRINT_FONTS[0], size)
+    small = ImageFont.truetype(font_path or PRINT_FONTS[0], int(size * 0.52))
+    x, y = xy
+    d.text((x, y), price, font=font, fill=fg)
+    box = d.textbbox((0, 0), price, font=font)
+    # Raised to sit against the top of the digits, which is what makes the
+    # glyph look like part of the number to a line-based recogniser.
+    d.text((x + (box[2] - box[0]) + size * 0.06, y - size * 0.06), "đ", font=small, fill=fg)
+    return x + (box[2] - box[0]) + size * 0.5
+
+
+def scene_superscript_dong(label, price, size, rng):
+    """A single white menu row on a blue board, price + raised đ."""
+    img = Image.new("RGB", (W, H), (28, 92, 168))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([40, 40, W - 40, H - 40], radius=28, fill=(252, 252, 250))
+
+    name_font = ImageFont.truetype(PRINT_FONTS[0], int(size * 0.72))
+    d.text((90, H / 2 - size * 0.95), label, font=name_font, fill=(18, 62, 122))
+    d.line([90, H / 2 - size * 0.1, W - 90, H / 2 - size * 0.1], fill=(200, 206, 214), width=2)
+    draw_price_with_superscript_dong(d, (90, H / 2 + size * 0.2), price, size, (26, 26, 30))
+    return img
+
+
+def scene_dong_menu(rng):
+    """A column of menu rows, every price closed by a raised đ."""
+    img = Image.new("RGB", (W, H), (28, 92, 168))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([30, 30, W - 30, H - 30], radius=28, fill=(252, 252, 250))
+
+    head = ImageFont.truetype(PRINT_FONTS[0], 52)
+    d.text((70, 60), "CƠM  ·  RICE", font=head, fill=(18, 62, 122))
+
+    rows = [("Sườn nướng", "25.000"), ("Phở bò tái", "30.000"), ("Bánh mì ốp la", "15.000")]
+    name_font = ImageFont.truetype(PRINT_FONTS[0], 46)
+    y = 175
+    for label, price in rows:
+        d.text((70, y), label, font=name_font, fill=(26, 26, 30))
+        draw_price_with_superscript_dong(d, (W - 320, y - 4), price, 56, (26, 26, 30))
+        y += 130
+        d.line([70, y - 40, W - 70, y - 40], fill=(206, 212, 220), width=2)
+    return img
+
+
 def cardboard(rng):
     """A muted brown board with fibre speckle."""
     img = Image.new("RGB", (W, H), (198, 170, 132))
@@ -363,6 +409,25 @@ def build(outdir):
         ("neg_hours", [("Mở cửa", 46, sans), ("08:00 - 22:00", 72, sans)], "opening hours"),
     ]:
         add(name, scene_printed(lines, (250, 248, 243), (22, 22, 26), rng), None, "negative", note)
+
+    # ---- 8. the superscript đồng sign -----------------------------------
+    # Printed menus set "đ" small and raised right after the price. Tesseract
+    # reads that glyph as a digit — usually 4 — which silently multiplies the
+    # price by ten and adds four. Reported from a real Phở Hà Nội menu board.
+    for name, label, price, size, expect in [
+        ("dong_super_25k", "Sườn nướng", "25.000", 74, 25000),
+        ("dong_super_30k", "Phở bò", "30.000", 88, 30000),
+        ("dong_super_15k", "Bánh mì ốp la", "15.000", 74, 15000),
+        ("dong_super_8k", "Cà phê đen", "8.000", 74, 8000),
+        ("dong_super_120k", "Lẩu thập cẩm", "120.000", 74, 120000),
+    ]:
+        add(name, scene_superscript_dong(label, price, size, rng), expect,
+            "currency-glyph", "đồng sign set small and raised")
+
+    # The same board with a whole column of them, as photographed.
+    add("dong_super_menu", scene_dong_menu(rng), 25000, "currency-glyph",
+        "menu column with raised đồng signs",
+        [25000, 30000, 15000])
 
     with open(os.path.join(outdir, "index.json"), "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=2)

@@ -269,6 +269,33 @@ test('exported helpers do not throw on junk', () => {
   assert.deepEqual(VPC.rank(null), []);
 });
 
+test('the superscript đồng sign is money, not a temperature', () => {
+  // Menus print "đ" small and raised; Tesseract returns it as a degree mark.
+  assert.equal(best('25.000°'), 25000);
+  assert.equal(best('30.000°'), 30000);
+  assert.equal(best('8.000°'), 8000);
+  assert.equal(best('120.000°'), 120000);
+  assert.equal(best('25.000º'), 25000);
+  assert.equal(best('Suon nuong 25.000°'), 25000);
+  // Only after a grouped price. A bare number keeps its degrees.
+  assert.equal(best('25°C'), null);
+  assert.equal(best('30°'), null);
+});
+
+test('a raised đồng sign read as a digit does not inflate the price', () => {
+  // The same glyph sometimes comes back as 4, 1 or 7 glued to the number.
+  assert.equal(best('25.0004'), 25000);
+  assert.equal(best('30.0004'), 30000);
+  assert.equal(best('8.0004'), 8000);
+  assert.equal(best('1.250.0004'), 1250000);
+  assert.equal(best('25.0001'), 25000);
+  assert.equal(best('25.0007'), 25000);
+  // The literal reading stays available as an alternative.
+  assert.ok(all('25.0004').includes(250004));
+  // But a four-digit tail that is itself a sane price is left alone.
+  assert.equal(best('1.2500'), 12500);
+});
+
 test('formatting', () => {
   assert.match(VPC.formatVnd(120000), /120[.,\s]000\s*₫/);
   assert.equal(VPC.formatTwd(146.5), 'NT$147');

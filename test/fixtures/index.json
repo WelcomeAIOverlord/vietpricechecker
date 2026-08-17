@@ -299,5 +299,51 @@
     "mustInclude": [],
     "category": "negative",
     "note": "opening hours"
+  },
+  {
+    "file": "dong_super_25k.jpg",
+    "expect": 25000,
+    "mustInclude": [],
+    "category": "currency-glyph",
+    "note": "đồng sign set small and raised"
+  },
+  {
+    "file": "dong_super_30k.jpg",
+    "expect": 30000,
+    "mustInclude": [],
+    "category": "currency-glyph",
+    "note": "đồng sign set small and raised"
+  },
+  {
+    "file": "dong_super_15k.jpg",
+    "expect": 15000,
+    "mustInclude": [],
+    "category": "currency-glyph",
+    "note": "đồng sign set small and raised"
+  },
+  {
+    "file": "dong_super_8k.jpg",
+    "expect": 8000,
+    "mustInclude": [],
+    "category": "currency-glyph",
+    "note": "đồng sign set small and raised"
+  },
+  {
+    "file": "dong_super_120k.jpg",
+    "expect": 120000,
+    "mustInclude": [],
+    "category": "currency-glyph",
+    "note": "đồng sign set small and raised"
+  },
+  {
+    "file": "dong_super_menu.jpg",
+    "expect": 25000,
+    "mustInclude": [
+      25000,
+      30000,
+      15000
+    ],
+    "category": "currency-glyph",
+    "note": "menu column with raised đồng signs"
   }
 ]

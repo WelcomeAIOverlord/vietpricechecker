@@ -39,6 +39,7 @@ const THRESHOLDS = {
   'printed-hard': 1.0,
   'handwritten': 0.85,
   'negative': 1.0,
+  'currency-glyph': 1.0,
 };
 
 if (!fs.existsSync(path.join(FIXTURES, 'index.json'))) {

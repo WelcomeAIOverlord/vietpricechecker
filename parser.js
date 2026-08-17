@@ -35,6 +35,10 @@
   // that would otherwise be assumed to be thousands.
   const LABEL_PREFIX = /(?:ph[oòơở]ng|b[aà]n|t[aâầ]ng|s[oố]|size|c[oỡ]|gh[eế]|qu[aậ]n|l[oô]|xe|m[aã]|k[eệ]|d[aã]y|lo[aạ]i|h[aạ]ng|ng[aà]y)\s*[:.\-]?\s*$/i;
 
+  // What a small raised "đ" degrades into. Only trusted after a number that is
+  // already grouped in thousands, so temperatures stay temperatures.
+  const DONG_GLYPH_AFTER = /^\s{0,2}[°º ªᵈ\u00ba\u00aa](?![a-zÀ-ỹ0-9])/;
+
   // Vietnamese hotlines look exactly like a grouped price.
   const HOTLINE_PREFIX = /(?:hotline|t[oổ]ng\s*[dđ][aà]i|lh|li[eê]n\s*h[eệ]|[dđ]t|s[dđ]t|tel|phone|call)\s*[:.\-]?\s*$/i;
 
@@ -192,6 +196,23 @@
       // Classic Vietnamese thousands grouping: 1.250.000
       return { value: parseInt(digits, 10), grouped: true, decimals: 0, digits };
     }
+
+    // Every group after the first is exactly three digits except the last,
+    // which has four. Menus print the đồng sign as a small raised character
+    // right after the price, and Tesseract reads that as a digit — usually 4,
+    // sometimes 1 or 7 — so "25.000đ" arrives as "25.0004". Report the price
+    // without the stray glyph and let the caller offer both readings.
+    if (tail.slice(0, -1).every((g) => g.length === 3) && tail[tail.length - 1].length === 4) {
+      const kept = digits.slice(0, -1);
+      return {
+        value: parseInt(digits, 10),
+        grouped: true,
+        decimals: 0,
+        digits,
+        strayGlyph: { digits: kept, value: parseInt(kept, 10), glyph: digits.slice(-1) },
+      };
+    }
+
     if (groups.length === 2 && tail[0].length <= 2) {
       // Decimal: "1,5" triệu / "35.5"
       return { value: parseFloat(groups[0] + '.' + tail[0]), grouped: false, decimals: tail[0].length, digits };
@@ -199,7 +220,7 @@
     // Three or more groups that are not all thousands is a date, a version
     // number or a serial — "16 08 2026" is not sixteen million.
     if (groups.length > 2) return null;
-    // Two groups with an odd tail, e.g. "1.2500" — trust the digits, drop the
+    // Two groups with an odd tail, e.g. "1.25000" — trust the digits, drop the
     // structure.
     return { value: parseInt(digits, 10), grouped: true, decimals: 0, digits };
   }
@@ -245,16 +266,28 @@
 
       const before = src.slice(Math.max(0, start - 12), start);
       let after = src.slice(end);
+      let dongGlyph = false;
+
+      // Menus set the đồng sign small and raised, and Tesseract reads that
+      // superscript as a degree or ordinal mark. After a number that is already
+      // grouped in thousands it is money, not a temperature — "25.000°" is
+      // twenty-five thousand đồng, while a bare "25°C" stays a temperature.
+      if (num.grouped && DONG_GLYPH_AFTER.test(after)) {
+        const g = after.match(DONG_GLYPH_AFTER)[0];
+        end += g.length;
+        after = src.slice(end);
+        dongGlyph = true;
+      }
 
       // Reject measurements: "500 g", "1 kg", "330ml"
-      if (MEASURE_AFTER.test(after)) continue;
+      if (!dongGlyph && MEASURE_AFTER.test(after)) continue;
       // Reject anything glued to a slash-date or ratio we failed to mask.
       if (/^\s*[/]\s*\d/.test(after) || /\d\s*[/]\s*$/.test(before)) continue;
 
       let value = num.value;
       let mult = 1;
       let unitKind = null;
-      let explicitCurrency = CURRENCY_PREFIX.test(before);
+      let explicitCurrency = dongGlyph || CURRENCY_PREFIX.test(before);
 
       const spaced = after.match(/^\s*/)[0].length;
       const unit = matchUnit(after.slice(spaced));
@@ -331,6 +364,28 @@
       if (value_vnd % 1000 === 0) score += 0.5;
 
       out.push(Object.assign({ vnd: value_vnd, raw, score, repaired: false }, base));
+
+      // A four-digit final group is a đồng sign that got read as a digit.
+      // Offer the price without it; the literal reading stays in the list, but
+      // it never wins, because "25.0004" is not a shape any price takes.
+      if (num.strayGlyph && mult === 1 && !assumed) {
+        const stripped = num.strayGlyph.value;
+        if (stripped >= MIN_VND && stripped <= MAX_VND) {
+          // Only take the lead when the literal reading is not a shape money
+          // comes in. "25.0004" is not, so the đồng sign is the explanation;
+          // "1.2500" is a fine price on its own, so leave that one alone.
+          const literalPlausible = value_vnd % 500 === 0;
+          out.push(Object.assign({}, base, {
+            vnd: stripped,
+            raw,
+            // The stray glyph *is* the currency mark, so this reading earns the
+            // same confidence a written "đ" would have given it.
+            currency: !literalPlausible,
+            score: score + (literalPlausible ? -1.5 : 2.5),
+            repaired: true,
+          }));
+        }
+      }
 
       // Offer the zeroed reading of a mangled tail as a sibling candidate.
       const snapped = num.digits && mult === 1 && !assumed ? snapZeroTail(num.digits) : null;
