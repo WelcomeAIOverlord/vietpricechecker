@@ -476,6 +476,18 @@ input { -webkit-user-select: text; user-select: text; }
   font-variant-numeric: tabular-nums;
 }
 
+.row-actions-end { justify-content: flex-end; }
+.note-input, .rate-edit input#reportExpected {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 13px;
+  color: var(--text);
+  font-size: 16px;
+}
+.rate-edit input#reportExpected { width: 180px; }
+
 .fineprint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 16px 0 0; }
 #version { display: block; margin-top: 6px; opacity: .7; }
 

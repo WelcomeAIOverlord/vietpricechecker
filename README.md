@@ -31,6 +31,13 @@ remembers the last one it saw.
 - **Photo button** (left) — scan a picture already in your library. This runs
   the most thorough recognition, so it is the one to use when a live scan
   struggles.
+- **Highlight the price** — after the shutter the picture freezes. Drag across
+  the price (a rough swipe along the line is enough) to read only that part.
+  This is the answer to shelf labels with a barcode next to them: crop the
+  barcode out and it cannot be misread.
+- **Tap the right number** — every number found gets a marker on the frozen
+  picture, labelled with its NT$ value. Tap one to make it the answer, or tap
+  a row in the list underneath. **Retake** goes back to the camera.
 - **live** (right) — keeps scanning every second or so. Handy for walking down
   a menu; it uses more battery.
 - **Type a price** — the field at the bottom accepts `120.000`, `35k`, `1tr2`,
@@ -60,6 +67,7 @@ Measured against the 41-image benchmark in `test/fixtures` (see below):
 | Menus and receipts, every price on the list | 3/3 |
 | Hard photos — tilted, blurred, glare, dark signage, night noise | 8/8 |
 | Handwritten marker on paper or cardboard, chalkboard | 12/13 |
+| Menu boards with the đồng sign set small and raised | 6/6 |
 | Things that are **not** prices (dates, phone numbers, weights, opening hours) | 4/4 correctly ignored |
 
 **Honest limits.** The engine is Tesseract, which is trained on print. Block
@@ -73,6 +81,18 @@ that fails is exactly that. When a scan looks wrong:
 
 It reads Latin digits, not Vietnamese words for numbers, so `hai mươi lăm nghìn`
 spelled out in full will not be picked up.
+
+## Reporting a bad scan
+
+When a reading is wrong, **Wrong? Report it** sends the photo you just scanned,
+what the app read, and what it should have said. That is the only way to fix
+recognition against prices that exist in real shops rather than in a fixture
+generator.
+
+Reports land in a Cloudflare Worker backed by D1 and are reviewable as a page of
+cards with the images — see [`worker/README.md`](worker/README.md). The photo is
+downscaled before sending, nothing else about you goes with it, and the whole
+thing is optional: the app works completely without it.
 
 ## How it works
 

@@ -11,6 +11,9 @@
   const OPTS_KEY = 'vpc.opts';
   const ENGINE_CACHE = 'vpc-engine-v2';
 
+  // Optional support API: reporting a bad scan. The app never needs it to work.
+  const API_BASE = 'https://vietpricechecker-api.internalsys.workers.dev';
+
   const CORE_SIMD = 'vendor/tesseract/tesseract-core-simd-lstm.wasm.js';
   const CORE_PLAIN = 'vendor/tesseract/tesseract-core-lstm.wasm.js';
   const WORKER_JS = 'vendor/tesseract/worker.min.js';
@@ -40,6 +43,9 @@
     hits: $('hits'), frozenBar: $('frozenBar'), frozenHint: $('frozenHint'),
     retakeBtn: $('retakeBtn'), guideWrap: $('guideWrap'),
     resultActions: $('resultActions'), reportBtn: $('reportBtn'),
+    reportPanel: $('reportPanel'), reportClose: $('reportClose'),
+    reportExpected: $('reportExpected'), reportNote: $('reportNote'),
+    reportSend: $('reportSend'), reportStatus: $('reportStatus'),
   };
 
   // Hooks the browser tests read. Harmless in production: a boolean and the
@@ -65,6 +71,7 @@
     frozen: null,     // { canvas, w, h }
     frozenFit: null,  // { x, y, w, h } of the image inside #stage
     chosen: null,     // index into the ranked list the user tapped
+    build: 'dev',
   };
 
   /* ------------------------------------------------------------------ *
@@ -1124,6 +1131,88 @@
     setStatus('Typed in');
   }
 
+
+  /* ------------------------------------------------------------------ *
+   * reporting a bad scan
+   *
+   * A tester who sees a wrong number can send the picture and what the app
+   * read. That is the only way to fix recognition against prices that exist
+   * in real shops rather than in a fixture generator.
+   * ------------------------------------------------------------------ */
+
+  /** Shrink the frozen frame to something worth sending over mobile data. */
+  function reportImage() {
+    if (!state.frozen) return null;
+    const MAX = 1000;
+    const { canvas, w, h } = state.frozen;
+    const scale = Math.min(1, MAX / Math.max(w, h));
+    const out = document.createElement('canvas');
+    out.width = Math.round(w * scale);
+    out.height = Math.round(h * scale);
+    out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+    const data = out.toDataURL('image/jpeg', 0.7);
+    releaseCanvas(out);
+    return data;
+  }
+
+  function openReport() {
+    if (!lastResults) {
+      toast('Scan something first');
+      return;
+    }
+    el.reportExpected.value = '';
+    el.reportNote.value = '';
+    el.reportStatus.textContent = state.frozen
+      ? ''
+      : 'No picture to send — this will report the reading only.';
+    el.reportPanel.hidden = false;
+  }
+
+  async function sendReport() {
+    const typed = el.reportExpected.value.trim();
+    let expected = null;
+    if (typed) {
+      const parsed = VPC.rank(VPC.extract(typed, { assumeThousands: state.opts.thousands }));
+      if (!parsed.length) {
+        el.reportStatus.textContent = 'Could not read “' + typed + '” as a price. Try 25.000 or 25k.';
+        return;
+      }
+      expected = parsed[0].vnd;
+    }
+
+    const ranked = lastResults.ranked || [];
+    const shown = ranked.length ? ranked[Math.min(state.chosen || 0, ranked.length - 1)].vnd : null;
+
+    el.reportSend.disabled = true;
+    el.reportStatus.textContent = 'Sending…';
+    try {
+      const res = await fetch(API_BASE + '/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appVersion: VERSION,
+          build: state.build,
+          source: state.frozen ? 'photo' : 'typed',
+          image: reportImage(),
+          ocrText: (lastResults.text || '').slice(0, 4000),
+          candidates: ranked.slice(0, 8).map((c) => ({ vnd: c.vnd, score: c.score, repaired: !!c.repaired })),
+          shown,
+          expected,
+          note: el.reportNote.value.trim().slice(0, 500),
+        }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      el.reportPanel.hidden = true;
+      toast('Thanks — report sent');
+    } catch (err) {
+      el.reportStatus.textContent = navigator.onLine
+        ? 'Could not send it (' + err.message + '). Try again later.'
+        : 'You are offline — reconnect and report it then.';
+    } finally {
+      el.reportSend.disabled = false;
+    }
+  }
+
   /* ------------------------------------------------------------------ *
    * settings
    * ------------------------------------------------------------------ */
@@ -1153,6 +1242,12 @@
   function wire() {
     el.shutter.addEventListener('click', scanNow);
     el.retakeBtn.addEventListener('click', unfreeze);
+    el.reportBtn.addEventListener('click', openReport);
+    el.reportClose.addEventListener('click', () => { el.reportPanel.hidden = true; });
+    el.reportSend.addEventListener('click', sendReport);
+    el.reportPanel.addEventListener('click', (e) => {
+      if (e.target === el.reportPanel) el.reportPanel.hidden = true;
+    });
     wireSelection();
     el.camStart.addEventListener('click', startCamera);
     el.liveBtn.addEventListener('click', () => setLive(!state.live));
@@ -1299,6 +1394,14 @@
 
   async function boot() {
     el.version.textContent = 'v' + VERSION + ' · offline OCR by Tesseract';
+    fetch('sw.js', { cache: 'no-store' })
+      .then((r) => r.text())
+      .then((t) => {
+        const m = t.match(/const BUILD = '([^']+)'/);
+        state.build = m ? m[1] : 'dev';
+        el.version.textContent = 'v' + VERSION + ' · build ' + state.build;
+      })
+      .catch(() => {});
     state.coreUrl = wasmSimdSupported() ? CORE_SIMD : CORE_PLAIN;
     el.netChip.hidden = navigator.onLine;
 

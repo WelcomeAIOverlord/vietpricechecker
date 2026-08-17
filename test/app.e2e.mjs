@@ -419,6 +419,46 @@ await check('no absolute paths that would break on a project page', async () => 
   }
 });
 
+await check('a bad scan can be reported', async () => {
+  // Intercept so the suite never writes to the real reports database.
+  let sent = null;
+  await page.route('**/report', async (route) => {
+    sent = JSON.parse(route.request().postData() || '{}');
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+
+  await page.evaluate(() => { window.__vpcLast = null; });
+  await page.setInputFiles('#fileInput', SAMPLE);
+  await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+
+  await page.click('#reportBtn');
+  assert(!(await page.isHidden('#reportPanel')), 'the report dialog did not open');
+  await page.fill('#reportExpected', '120k');
+  await page.fill('#reportNote', 'e2e self-test');
+  await page.click('#reportSend');
+  await page.waitForFunction(() => document.getElementById('reportPanel').hidden, null, { timeout: 20000 });
+
+  assert(sent, 'nothing was posted');
+  assert(sent.expected === 120000, 'expected parsed as ' + sent.expected);
+  assert(sent.shown === 120000, 'shown was ' + sent.shown);
+  assert(typeof sent.image === 'string' && sent.image.startsWith('data:image/jpeg;base64,'),
+    'no downscaled jpeg attached');
+  assert(sent.image.length < 400000, 'image not downscaled: ' + sent.image.length + ' chars');
+  assert(sent.note === 'e2e self-test', 'note was ' + sent.note);
+  assert(Array.isArray(sent.candidates) && sent.candidates.length > 0, 'no candidates attached');
+  await page.unroute('**/report');
+});
+
+await check('a report with an unreadable expected price is refused', async () => {
+  await page.click('#reportBtn');
+  await page.fill('#reportExpected', 'not a price');
+  await page.click('#reportSend');
+  await page.waitForTimeout(200);
+  assert(!(await page.isHidden('#reportPanel')), 'the dialog closed anyway');
+  assert(/Could not read/.test(await page.textContent('#reportStatus')), 'no explanation shown');
+  await page.click('#reportClose');
+});
+
 await check('no uncaught page errors during the run', async () => {
   assert(pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
 });
