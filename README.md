@@ -37,6 +37,14 @@ remembers the last one it saw.
   the price (a rough swipe along the line is enough) to read only that part.
   This is the answer to shelf labels with a barcode next to them: crop the
   barcode out and it cannot be misread.
+- **Zoom** — pinch with two fingers, or double-tap, or use −/+. Two fingers
+  always pinch and pan, whatever else is going on. The **Select / Move** toggle
+  only decides what a *single* finger does: draw a box, or shove the picture
+  around once you are zoomed in.
+- **The picture never moves.** Results appear in a sheet that floats over it,
+  so a box you drew over a price stays over that price. Drag the small handle
+  at the top of the sheet to expand it and scroll the details, then drop it
+  back to a peek.
 - **Tap the right number** — every number found gets a marker on the frozen
   picture, labelled with its NT$ value. Tap one to make it the answer, or tap
   a row in the list underneath. **Retake** goes back to the camera.

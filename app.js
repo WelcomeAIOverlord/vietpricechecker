@@ -39,10 +39,14 @@
     optThousands: $('optThousands'), optDigits: $('optDigits'), optRaw: $('optRaw'),
     packStatus: $('packStatus'), packBtn: $('packBtn'), version: $('version'),
     toast: $('toast'),
+    stage: $('stage'),
     still: $('still'), selectLayer: $('selectLayer'), selectBox: $('selectBox'),
     hits: $('hits'), frozenBar: $('frozenBar'), frozenHint: $('frozenHint'),
     retakeBtn: $('retakeBtn'), guideWrap: $('guideWrap'),
     resultActions: $('resultActions'), reportBtn: $('reportBtn'),
+    modeSelect: $('modeSelect'), modeMove: $('modeMove'),
+    zoomIn: $('zoomIn'), zoomOut: $('zoomOut'),
+    sheet: $('sheet'), sheetHandle: $('sheetHandle'), sheetHandleLabel: $('sheetHandleLabel'),
     reportPanel: $('reportPanel'), reportClose: $('reportClose'),
     reportExpected: $('reportExpected'), reportNote: $('reportNote'),
     reportSend: $('reportSend'), reportStatus: $('reportStatus'),
@@ -70,8 +74,12 @@
     coreUrl: CORE_SIMD,
     // The frozen frame the user drags on, and where it sits on screen.
     frozen: null,     // { canvas, w, h }
-    frozenFit: null,  // { x, y, w, h } of the image inside #stage
+    // How the frozen image is laid over the stage. One source of truth for
+    // drawing, for pinch zoom, and for turning a finger position into a pixel.
+    view: { base: 1, zoom: 1, tx: 0, ty: 0 },
+    oneFinger: 'select', // or 'move'
     chosen: null,     // index into the ranked list the user tapped
+    sheetOpen: false,
     build: 'dev',
   };
 
@@ -632,16 +640,20 @@
     el.still.hidden = false;
     el.selectLayer.hidden = false;
     el.frozenBar.hidden = false;
+    el.frozenHint.hidden = false;
     el.guideWrap.hidden = true;
     el.guideHint.textContent = '';
+    setOneFinger('select');
     stopCamera();
-    layoutFrozen();
+    fitView();
   }
 
   function unfreeze() {
     state.frozen = null;
-    state.frozenFit = null;
+    state.view = { base: 1, zoom: 1, tx: 0, ty: 0 };
     el.still.hidden = true;
+    el.frozenHint.hidden = true;
+    el.still.style.transform = '';
     // Hand the frame's backing store back before starting the camera again.
     releaseCanvas(el.still);
     el.selectLayer.hidden = true;
@@ -655,44 +667,91 @@
     if (!state.stream) startCamera();
   }
 
-  /**
-   * Where the frozen image actually sits inside the stage. The canvas is
-   * object-fit: contain, so it is letterboxed, and every screen coordinate has
-   * to be mapped through this to reach image pixels.
-   */
-  function layoutFrozen() {
+  /* ---- view transform ------------------------------------------------ *
+   * The image is placed by an explicit scale and offset rather than by
+   * object-fit, so pinch zoom, the marker overlay and the crop that gets
+   * recognised all read from the same numbers and cannot drift apart.
+   * -------------------------------------------------------------------- */
+
+  const MAX_ZOOM = 8;
+
+  function stageRect() {
+    return el.stage.getBoundingClientRect();
+  }
+
+  /** Scale the whole image to fit, centred, and forget any zoom. */
+  function fitView() {
     if (!state.frozen) return;
-    const r = el.still.getBoundingClientRect();
+    const r = stageRect();
     const { w, h } = state.frozen;
-    const scale = Math.min(r.width / w, r.height / h);
-    const dw = w * scale;
-    const dh = h * scale;
-    state.frozenFit = {
-      x: r.left + (r.width - dw) / 2,
-      y: r.top + (r.height - dh) / 2,
-      w: dw,
-      h: dh,
-      scale,
-    };
+    const base = Math.min(r.width / w, r.height / h) || 1;
+    state.view = { base, zoom: 1, tx: (r.width - w * base) / 2, ty: (r.height - h * base) / 2 };
+    applyView();
+  }
+
+  function viewScale() {
+    return state.view.base * state.view.zoom;
+  }
+
+  /**
+   * Keep the image within reach. Whichever axis is smaller than the stage stays
+   * centred; the other is clamped so it cannot be flung off screen entirely.
+   */
+  function clampView() {
+    const r = stageRect();
+    const s = viewScale();
+    const w = state.frozen.w * s;
+    const h = state.frozen.h * s;
+    state.view.tx = w <= r.width
+      ? (r.width - w) / 2
+      : Math.min(0, Math.max(r.width - w, state.view.tx));
+    state.view.ty = h <= r.height
+      ? (r.height - h) / 2
+      : Math.min(0, Math.max(r.height - h, state.view.ty));
+  }
+
+  function applyView() {
+    if (!state.frozen) return;
+    clampView();
+    const { tx, ty } = state.view;
+    el.still.style.width = state.frozen.w + 'px';
+    el.still.style.height = state.frozen.h + 'px';
+    el.still.style.transform =
+      'translate(' + tx + 'px,' + ty + 'px) scale(' + viewScale() + ')';
+    el.zoomOut.disabled = state.view.zoom <= 1.001;
+    el.zoomIn.disabled = state.view.zoom >= MAX_ZOOM - 0.001;
+    renderHits();
+  }
+
+  /** Zoom about a point in stage coordinates, so that point stays put. */
+  function zoomAround(factor, px, py) {
+    const before = viewScale();
+    const next = Math.max(1, Math.min(MAX_ZOOM, state.view.zoom * factor));
+    state.view.zoom = next;
+    const after = viewScale();
+    const k = after / before;
+    state.view.tx = px - (px - state.view.tx) * k;
+    state.view.ty = py - (py - state.view.ty) * k;
+    applyView();
   }
 
   function screenToImage(clientX, clientY) {
-    const f = state.frozenFit;
-    if (!f) return { x: 0, y: 0 };
+    const r = stageRect();
+    const s = viewScale();
     return {
-      x: Math.max(0, Math.min(state.frozen.w, (clientX - f.x) / f.scale)),
-      y: Math.max(0, Math.min(state.frozen.h, (clientY - f.y) / f.scale)),
+      x: Math.max(0, Math.min(state.frozen.w, (clientX - r.left - state.view.tx) / s)),
+      y: Math.max(0, Math.min(state.frozen.h, (clientY - r.top - state.view.ty) / s)),
     };
   }
 
+  /** An image-space rectangle in coordinates the overlay can be styled with. */
   function imageRectToScreen(box) {
-    const f = state.frozenFit;
-    const stage = el.selectLayer.getBoundingClientRect();
+    const s = viewScale();
     return {
-      left: f.x - stage.left + box.sx * f.scale,
-      top: f.y - stage.top + box.sy * f.scale,
-      width: box.sw * f.scale,
-      height: box.sh * f.scale,
+      left: state.view.tx + box.sx * s,
+      top: state.view.ty + box.sy * s,
+      width: box.sw * s,
+      height: box.sh * s,
     };
   }
 
@@ -736,7 +795,6 @@
     const down = (e) => {
       if (!state.frozen || state.busy) return;
       const t = e.touches ? e.touches[0] : e;
-      layoutFrozen();
       start = screenToImage(t.clientX, t.clientY);
       moved = false;
       el.hits.innerHTML = '';
@@ -784,13 +842,137 @@
       scanFrozen(crop);
     };
 
-    el.selectLayer.addEventListener('touchstart', down, { passive: false });
-    el.selectLayer.addEventListener('touchmove', move, { passive: false });
-    el.selectLayer.addEventListener('touchend', up);
     el.selectLayer.addEventListener('mousedown', down);
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
-    window.addEventListener('resize', () => { layoutFrozen(); renderHits(); });
+    window.addEventListener('resize', () => { if (state.frozen) fitView(); });
+
+    wireTouchGestures(down, move, up);
+  }
+
+
+  /* ---- touch gestures ------------------------------------------------- *
+   * Two fingers always pinch and pan: that can never be mistaken for a
+   * one-finger drag, so it needs no mode. The toggle only decides what a
+   * single finger does, which is the one genuinely ambiguous case once the
+   * picture is zoomed in.
+   * -------------------------------------------------------------------- */
+
+  function setOneFinger(mode) {
+    state.oneFinger = mode;
+    const selecting = mode === 'select';
+    el.modeSelect.setAttribute('aria-pressed', String(selecting));
+    el.modeMove.setAttribute('aria-pressed', String(!selecting));
+    el.frozenHint.textContent = selecting
+      ? 'Drag across the price · pinch to zoom'
+      : 'Drag to move · pinch to zoom · switch to Select to pick a price';
+  }
+
+  const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+
+  function wireTouchGestures(selectDown, selectMove, selectUp) {
+    let pinch = null;   // { d, cx, cy }
+    let pan = null;     // { x, y }
+    let selecting = false;
+    let lastTap = 0;
+
+    const onStart = (e) => {
+      if (!state.frozen || state.busy) return;
+
+      if (e.touches.length === 2) {
+        // A second finger cancels any selection that had started.
+        if (selecting) { selectUp({ changedTouches: [e.touches[0]] }); selecting = false; }
+        el.selectBox.hidden = true;
+        const r = stageRect();
+        const m = mid(e.touches[0], e.touches[1]);
+        pinch = { d: dist(e.touches[0], e.touches[1]), cx: m.x - r.left, cy: m.y - r.top };
+        pan = null;
+        e.preventDefault();
+        return;
+      }
+
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        const now = Date.now();
+        if (now - lastTap < 300) {
+          // Double tap: in one step to a useful magnification, or back out.
+          const r = stageRect();
+          zoomAround(state.view.zoom > 1.2 ? 1 / state.view.zoom : 2.5, t.clientX - r.left, t.clientY - r.top);
+          lastTap = 0;
+          e.preventDefault();
+          return;
+        }
+        lastTap = now;
+
+        if (state.oneFinger === 'move') {
+          pan = { x: t.clientX, y: t.clientY };
+        } else {
+          selecting = true;
+          selectDown(e);
+        }
+      }
+    };
+
+    const onMove = (e) => {
+      if (pinch && e.touches.length === 2) {
+        const d = dist(e.touches[0], e.touches[1]);
+        if (pinch.d > 0) zoomAround(d / pinch.d, pinch.cx, pinch.cy);
+        const m = mid(e.touches[0], e.touches[1]);
+        const r = stageRect();
+        state.view.tx += (m.x - r.left) - pinch.cx;
+        state.view.ty += (m.y - r.top) - pinch.cy;
+        pinch = { d, cx: m.x - r.left, cy: m.y - r.top };
+        applyView();
+        e.preventDefault();
+        return;
+      }
+      if (pan && e.touches.length === 1) {
+        const t = e.touches[0];
+        state.view.tx += t.clientX - pan.x;
+        state.view.ty += t.clientY - pan.y;
+        pan = { x: t.clientX, y: t.clientY };
+        applyView();
+        e.preventDefault();
+        return;
+      }
+      if (selecting) selectMove(e);
+    };
+
+    const onEnd = (e) => {
+      if (pinch) { pinch = null; if (e.touches.length === 0) pan = null; return; }
+      if (pan) { if (e.touches.length === 0) pan = null; return; }
+      if (selecting) { selecting = false; selectUp(e); }
+    };
+
+    el.selectLayer.addEventListener('touchstart', onStart, { passive: false });
+    el.selectLayer.addEventListener('touchmove', onMove, { passive: false });
+    el.selectLayer.addEventListener('touchend', onEnd);
+    el.selectLayer.addEventListener('touchcancel', onEnd);
+
+    // A mouse wheel is the desktop equivalent of a pinch, and makes the
+    // behaviour testable in a headless browser.
+    el.selectLayer.addEventListener('wheel', (e) => {
+      if (!state.frozen) return;
+      const r = stageRect();
+      zoomAround(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - r.left, e.clientY - r.top);
+      e.preventDefault();
+    }, { passive: false });
+  }
+
+  /* ---- results sheet --------------------------------------------------- */
+
+  /**
+   * The sheet overlays the picture instead of resizing it. That is the whole
+   * point: a box drawn over a price must stay over that price when an answer
+   * appears underneath.
+   */
+  function setSheetOpen(open) {
+    state.sheetOpen = open;
+    el.sheet.classList.toggle('open', open);
+    el.sheetHandle.setAttribute('aria-expanded', String(open));
+    el.sheetHandleLabel.textContent = open ? 'Collapse the results' : 'Expand the results';
+    if (!open) el.sheet.scrollTop = 0;
   }
 
   /** Draw a tappable marker over every number the scan found. */
@@ -798,9 +980,7 @@
     el.hits.innerHTML = '';
     const r = result || lastResults;
     if (!r || !state.frozen || !r.ranked) return;
-    // The results sheet grows when an answer appears, which resizes the stage,
-    // so the image has to be re-measured before anything is drawn over it.
-    layoutFrozen();
+
 
     r.ranked.forEach((c, i) => {
       if (!c.box) return;
@@ -1299,6 +1479,17 @@
   function wire() {
     el.shutter.addEventListener('click', scanNow);
     el.retakeBtn.addEventListener('click', unfreeze);
+    el.modeSelect.addEventListener('click', () => setOneFinger('select'));
+    el.modeMove.addEventListener('click', () => setOneFinger('move'));
+    el.zoomIn.addEventListener('click', () => {
+      const r = stageRect();
+      zoomAround(1.6, r.width / 2, r.height / 2);
+    });
+    el.zoomOut.addEventListener('click', () => {
+      const r = stageRect();
+      zoomAround(1 / 1.6, r.width / 2, r.height / 2);
+    });
+    el.sheetHandle.addEventListener('click', () => setSheetOpen(!state.sheetOpen));
     el.reportBtn.addEventListener('click', openReport);
     el.reportClose.addEventListener('click', () => { el.reportPanel.hidden = true; });
     el.reportSend.addEventListener('click', sendReport);

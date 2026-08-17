@@ -12,6 +12,10 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   /* How much of the viewport the software keyboard is covering, set by app.js. */
   --kb: 0px;
+  /* The results sheet peeks by default and expands over the picture. The stage
+     is sized from --peek alone, so expanding never moves the image. */
+  --peek: 34dvh;
+  --sheet-h: var(--peek);
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -30,8 +34,7 @@ body { -webkit-user-select: none; user-select: none; }
 input { -webkit-user-select: text; user-select: text; }
 
 #app {
-  display: flex;
-  flex-direction: column;
+  position: relative;
   height: 100dvh;
   /* Lift the whole app clear of the software keyboard while typing. */
   transform: translateY(calc(-1 * var(--kb)));
@@ -89,10 +92,14 @@ input { -webkit-user-select: text; user-select: text; }
 
 /* ---------- camera stage ---------- */
 
+/* Fixed geometry. The image must never move because text appeared under it —
+   a selection drawn over a price has to stay over that price. */
 #stage {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(100dvh - var(--peek));
   background: #05080f;
   overflow: hidden;
 }
@@ -143,14 +150,16 @@ input { -webkit-user-select: text; user-select: text; }
 
 /* ---------- frozen still and region select ---------- */
 
+/* Positioned and scaled by app.js rather than object-fit, so pinch zoom and
+   the screen-to-image mapping share one source of truth. */
 #still {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
   background: #05080f;
   z-index: 2;
+  will-change: transform;
 }
 #still[hidden] { display: none; }
 
@@ -210,12 +219,13 @@ input { -webkit-user-select: text; user-select: text; }
   position: absolute;
   left: 0; right: 0;
   top: calc(var(--safe-t) + 58px);
-  z-index: 6;
+  z-index: 5;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   justify-content: center;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 10px;
+  flex-wrap: wrap;
 }
 #frozenBar[hidden] { display: none; }
 
@@ -231,6 +241,41 @@ input { -webkit-user-select: text; user-select: text; }
   font-weight: 600;
 }
 .pill-quiet { color: var(--muted); font-weight: 400; }
+.pill-icon { width: 38px; padding: 8px 0; text-align: center; font-size: 18px; line-height: 1; }
+
+/* One finger draws a box, or moves the picture. Two fingers always pinch. */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  background: rgba(10, 16, 32, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.segmented button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.segmented button[aria-pressed="true"] { background: var(--accent); color: #211802; }
+
+.frozen-hint {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 84px;
+  z-index: 4;
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+}
+.frozen-hint[hidden] { display: none; }
 
 .result-actions { display: flex; gap: 8px; margin-top: 12px; }
 .more li { cursor: pointer; }
@@ -315,13 +360,53 @@ input { -webkit-user-select: text; user-select: text; }
 /* ---------- results sheet ---------- */
 
 #sheet {
-  flex: 0 0 auto;
-  max-height: 58dvh;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--sheet-h);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   background: var(--bg-soft);
   border-top: 1px solid var(--line);
-  padding: 14px 16px calc(var(--safe-b) + 12px);
+  border-radius: 16px 16px 0 0;
+  padding: 0 16px calc(var(--safe-b) + 12px);
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.35);
+  transition: height .22s ease;
+  z-index: 6;
+}
+#sheet.open { --sheet-h: 78dvh; }
+
+.sheet-handle {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  padding: 9px 0 7px;
+  margin: 0 0 2px;
+  border: 0;
+  background: var(--bg-soft);
+  cursor: pointer;
+}
+.grabber {
+  display: block;
+  width: 40px;
+  height: 4px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: #46567a;
+}
+#sheet.open .grabber { background: var(--teal); }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .status {

@@ -216,41 +216,138 @@ if (SAMPLE) {
       assert(after === alt, 'tapped ' + alt + ' but the headline shows ' + after);
     });
 
-    await check('dragging across one price reads only that price', async () => {
-      // Take the box of a reading the app found, and drag over it.
-      const target = await page.evaluate(() => {
-        const c = window.__vpcLast.ranked.find((r) => r.box);
-        if (!c) return null;
-        const layer = document.getElementById('selectLayer').getBoundingClientRect();
-        const still = document.getElementById('still');
-        const r = still.getBoundingClientRect();
-        const iw = still.width, ih = still.height;
-        const scale = Math.min(r.width / iw, r.height / ih);
-        const ox = r.left + (r.width - iw * scale) / 2;
-        const oy = r.top + (r.height - ih * scale) / 2;
-        return {
-          vnd: c.vnd,
-          x0: ox + c.box.sx * scale - layer.left,
-          y0: oy + c.box.sy * scale - layer.top,
-          x1: ox + (c.box.sx + c.box.sw) * scale - layer.left,
-          y1: oy + (c.box.sy + c.box.sh) * scale - layer.top,
-          left: layer.left, top: layer.top,
-        };
+    await check('the picture does not move when an answer appears', async () => {
+      // The reported bug: results arrived, the layout reflowed, and the image
+      // slid out from under the selection. The stage is sized from the
+      // collapsed sheet alone, so nothing below it may shift the picture.
+      const before = await page.evaluate(() => {
+        const r = document.getElementById('still').getBoundingClientRect();
+        return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
       });
-      assert(target, 'no reading carried a box');
 
       await page.evaluate(() => { window.__vpcLast = null; });
-      await page.mouse.move(target.left + target.x0 - 6, target.top + (target.y0 + target.y1) / 2);
+      await page.setInputFiles('#fileInput', hasMenu ? MENU : SAMPLE);
+      await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+      await page.waitForTimeout(400);
+
+      const after = await page.evaluate(() => {
+        const r = document.getElementById('still').getBoundingClientRect();
+        return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+      });
+      assert(JSON.stringify(before) === JSON.stringify(after),
+        'the image moved: ' + JSON.stringify(before) + ' -> ' + JSON.stringify(after));
+    });
+
+    await check('expanding the results sheet leaves the picture where it is', async () => {
+      const before = await page.evaluate(() => {
+        const r = document.getElementById('still').getBoundingClientRect();
+        return [Math.round(r.left), Math.round(r.top), Math.round(r.width)].join(',');
+      });
+      await page.click('#sheetHandle');
+      await page.waitForTimeout(400);
+      const open = await page.evaluate(() => ({
+        expanded: document.getElementById('sheet').classList.contains('open'),
+        rect: (() => {
+          const r = document.getElementById('still').getBoundingClientRect();
+          return [Math.round(r.left), Math.round(r.top), Math.round(r.width)].join(',');
+        })(),
+        scrollable: document.getElementById('sheet').scrollHeight >= document.getElementById('sheet').clientHeight,
+      }));
+      assert(open.expanded, 'the sheet did not expand');
+      assert(open.rect === before, 'expanding moved the image: ' + before + ' -> ' + open.rect);
+      assert(open.scrollable, 'the expanded sheet is not scrollable');
+
+      await page.click('#sheetHandle');
+      await page.waitForTimeout(400);
+      const closed = await page.evaluate(() => ({
+        expanded: document.getElementById('sheet').classList.contains('open'),
+        rect: (() => {
+          const r = document.getElementById('still').getBoundingClientRect();
+          return [Math.round(r.left), Math.round(r.top), Math.round(r.width)].join(',');
+        })(),
+      }));
+      assert(!closed.expanded, 'the sheet did not collapse again');
+      assert(closed.rect === before, 'collapsing moved the image');
+    });
+
+    await check('zooming keeps the markers on their prices', async () => {
+      // Zoom in, then confirm a marker still sits exactly over the same part of
+      // the image — that is what "the highlight follows the picture" means.
+      const before = await page.evaluate(() => {
+        const c = window.__vpcLast.ranked.find((x) => x.box);
+        const hit = document.querySelector('#hits .hit');
+        const r = hit.getBoundingClientRect();
+        return { vnd: c.vnd, w: Math.round(r.width) };
+      });
+
+      await page.click('#zoomIn');
+      await page.waitForTimeout(250);
+
+      const after = await page.evaluate(() => {
+        const hit = document.querySelector('#hits .hit');
+        const r = hit.getBoundingClientRect();
+        const still = document.getElementById('still').getBoundingClientRect();
+        return { w: Math.round(r.width), stillW: Math.round(still.width) };
+      });
+      assert(after.w > before.w * 1.3, 'the marker did not grow with the zoom');
+      // And the crop taken from a zoomed view still reads the same price.
+      const target = await page.evaluate(() => {
+        const r = document.querySelector('#hits .hit').getBoundingClientRect();
+        return { x0: r.left, y0: r.top, x1: r.right, y1: r.bottom };
+      });
+      await page.evaluate(() => { window.__vpcLast = null; });
+      const midY = (target.y0 + target.y1) / 2;
+      await page.mouse.move(Math.max(2, target.x0 - 4), midY);
       await page.mouse.down();
-      await page.mouse.move(target.left + target.x1 + 6, target.top + (target.y0 + target.y1) / 2, { steps: 12 });
+      await page.mouse.move(Math.min(386, target.x1 + 4), midY, { steps: 10 });
+      await page.mouse.up();
+      await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+      const r = await page.evaluate(() => window.__vpcLast);
+      assert(r.ranked.some((c) => c.vnd === before.vnd),
+        'zoomed selection read ' + JSON.stringify(r.ranked.map((c) => c.vnd)) + ', wanted ' + before.vnd);
+
+      // Zoom out until the control disables itself at 1x, which is the app
+      // telling us there is nothing left to zoom out of.
+      for (let i = 0; i < 6; i++) {
+        if (await page.isDisabled('#zoomOut')) break;
+        await page.click('#zoomOut');
+        await page.waitForTimeout(120);
+      }
+      assert(await page.isDisabled('#zoomOut'), 'zoom out never reached 1x');
+    });
+
+    await check('the one-finger mode can be switched', async () => {
+      await page.click('#modeMove');
+      assert(await page.getAttribute('#modeMove', 'aria-pressed') === 'true', 'Move did not engage');
+      assert(await page.getAttribute('#modeSelect', 'aria-pressed') === 'false', 'Select stayed on');
+      await page.click('#modeSelect');
+      assert(await page.getAttribute('#modeSelect', 'aria-pressed') === 'true', 'Select did not come back');
+    });
+
+    await check('dragging across one price reads only that price', async () => {
+      // Drag over a marker the app itself drew, so the test never re-derives
+      // the screen-to-image mapping and cannot disagree with the app about it.
+      const target = await page.evaluate(() => {
+        const hit = document.querySelector('#hits .hit');
+        if (!hit) return null;
+        const r = hit.getBoundingClientRect();
+        return { x0: r.left, y0: r.top, x1: r.right, y1: r.bottom };
+      });
+      assert(target, 'no marker was drawn');
+      const expected = await page.evaluate(() => window.__vpcLast.ranked.find((c) => c.box).vnd);
+
+      await page.evaluate(() => { window.__vpcLast = null; });
+      const midY = (target.y0 + target.y1) / 2;
+      await page.mouse.move(target.x0 - 4, midY);
+      await page.mouse.down();
+      await page.mouse.move(target.x1 + 4, midY, { steps: 12 });
       await page.mouse.up();
       await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
 
       const r = await page.evaluate(() => window.__vpcLast);
       assert(r.ranked.length > 0, 'the selection produced nothing');
-      assert(r.ranked.some((c) => c.vnd === target.vnd),
-        'expected ' + target.vnd + ' in ' + JSON.stringify(r.ranked.map((c) => c.vnd)));
-      // The point of highlighting: the other prices on the menu are gone.
+      assert(r.ranked.some((c) => c.vnd === expected),
+        'expected ' + expected + ' in ' + JSON.stringify(r.ranked.map((c) => c.vnd)));
       assert(r.ranked.length < 4, 'the selection still picked up ' + r.ranked.length + ' readings');
     });
 

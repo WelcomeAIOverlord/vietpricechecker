@@ -56,8 +56,17 @@
 
     <div id="frozenBar" hidden>
       <button id="retakeBtn" class="pill" type="button">↺ Retake</button>
-      <span id="frozenHint" class="pill pill-quiet">Drag across the price</span>
+      <!-- Two fingers always pinch and pan. This only decides what one finger
+           does, which is the only genuinely ambiguous case once zoomed in. -->
+      <div id="modeToggle" class="segmented" role="group" aria-label="What one finger does">
+        <button id="modeSelect" type="button" aria-pressed="true">Select</button>
+        <button id="modeMove" type="button" aria-pressed="false">Move</button>
+      </div>
+      <button id="zoomOut" class="pill pill-icon" type="button" aria-label="Zoom out">−</button>
+      <button id="zoomIn" class="pill pill-icon" type="button" aria-label="Zoom in">+</button>
     </div>
+
+    <p id="frozenHint" class="frozen-hint" hidden>Drag across the price</p>
 
     <div id="camGate">
       <div class="gate-inner">
@@ -87,6 +96,12 @@
   </main>
 
   <section id="sheet" aria-live="polite">
+    <button id="sheetHandle" class="sheet-handle" type="button"
+            aria-expanded="false" aria-controls="sheet">
+      <span class="grabber"></span>
+      <span id="sheetHandleLabel" class="sr-only">Expand the results</span>
+    </button>
+
     <div id="status" class="status">Warming up…</div>
 
     <div id="hero" hidden>
