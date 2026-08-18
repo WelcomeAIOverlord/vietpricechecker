@@ -15,7 +15,7 @@
 
 // Replaced at deploy time with the commit sha. Left as-is during local
 // development, where an unregister-and-reload is the normal way to refresh.
-const BUILD = '__BUILD__';
+const BUILD = 'e905a5999b09';
 
 const SHELL = 'vpc-shell-' + BUILD;
 const ENGINE = 'vpc-engine-v2';
