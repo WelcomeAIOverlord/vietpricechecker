@@ -421,11 +421,63 @@ if (SAMPLE) {
     await page.screenshot({ path: path.join(SHOTS, '05-highlight.png') });
   }
 
+  await check('permission is asked for once, not on every shutter tap', async () => {
+    // Each getUserMedia is a chance for iOS to put the permission sheet back on
+    // screen. A whole session of shutter, retake and app-switching must not
+    // cost more than the one request made at startup.
+    const before = await page.evaluate(() => window.__vpcGum());
+    assert(before >= 1, 'the camera was never requested at all');
+
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => { window.__vpcLast = null; });
+      await page.setInputFiles('#fileInput', SAMPLE);
+      await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+      await page.click('#retakeBtn');
+      await page.waitForTimeout(300);
+    }
+
+    // And backgrounding the app, which is what a phone does constantly.
+    for (let i = 0; i < 2; i++) {
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForTimeout(150);
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForTimeout(250);
+    }
+
+    const after = await page.evaluate(() => window.__vpcGum());
+    assert(after === before,
+      `permission was requested ${after - before} more time(s) across freeze/retake/backgrounding`);
+
+    // The camera must actually still work after all that.
+    const live = await page.evaluate(() => {
+      const v = document.getElementById('cam');
+      return !!v.srcObject && v.srcObject.getVideoTracks().some((t) => t.enabled && t.readyState === 'live');
+    });
+    assert(live, 'the camera did not come back after being paused');
+  });
+
   await check('retake returns to the live camera', async () => {
+    // Freeze first, so this does not depend on what the previous test left behind.
+    await page.evaluate(() => { window.__vpcLast = null; });
+    await page.setInputFiles('#fileInput', SAMPLE);
+    await page.waitForFunction(() => window.__vpcLast !== null, null, { timeout: 120000 });
+    assert(!(await page.isHidden('#still')), 'the picture never froze');
+
     await page.click('#retakeBtn');
     await page.waitForTimeout(400);
     assert(await page.isHidden('#still'), 'the still is still showing');
     assert(await page.isHidden('#selectLayer'), 'the select layer is still showing');
+    const live = await page.evaluate(() => {
+      const v = document.getElementById('cam');
+      return !!v.srcObject && v.srcObject.getVideoTracks().some((t) => t.enabled);
+    });
+    assert(live, 'the camera did not resume after retake');
   });
 }
 

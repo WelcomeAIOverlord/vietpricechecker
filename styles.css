@@ -600,6 +600,17 @@ input { -webkit-user-select: text; user-select: text; }
 }
 .rate-edit input#reportExpected { width: 180px; }
 
+.help {
+  border-top: 1px solid var(--line);
+  padding: 14px 0 2px;
+  font-size: 14px;
+}
+.help summary { cursor: pointer; color: var(--teal); font-weight: 600; }
+.help p, .help li { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.help ol { padding-left: 20px; margin: 8px 0; }
+.help li { margin-bottom: 8px; }
+.help b { color: var(--text); }
+
 .fineprint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 16px 0 0; }
 #version { display: block; margin-top: 6px; opacity: .7; }
 

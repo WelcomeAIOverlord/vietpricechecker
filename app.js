@@ -60,6 +60,9 @@
   window.__vpcReady = false;
   window.__vpcLast = null;
   window.__vpcPackLog = [];
+  // How many times the camera permission has been requested. The browser tests
+  // assert this stays at one across a whole session.
+  window.__vpcGum = () => state.gumCalls;
 
   let hadController = false;
 
@@ -86,6 +89,7 @@
     oneFinger: 'select', // or 'move'
     chosen: null,     // index into the ranked list the user tapped
     sheetOpen: false,
+    gumCalls: 0,   // how many times permission has been asked for
     build: 'dev',
   };
 
@@ -474,12 +478,30 @@
    * camera
    * ------------------------------------------------------------------ */
 
+  /** Is the stream we hold still usable, or has it been torn down? */
+  function streamIsLive() {
+    return !!(state.stream && state.stream.getVideoTracks().some((t) => t.readyState === 'live'));
+  }
+
+  /**
+   * Ask for the camera — but only if we do not already have it.
+   *
+   * Every call to getUserMedia is a chance for iOS to put the permission sheet
+   * back on screen. Freezing a frame, retaking, and switching apps used to end
+   * the stream and ask again, which is why the prompt kept coming back. The
+   * stream is now kept for the life of the page and merely paused.
+   */
   async function startCamera() {
+    if (streamIsLive()) {
+      resumeCamera();
+      return true;
+    }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       showGate('This browser cannot open the camera. You can still scan a saved photo.');
       return false;
     }
     try {
+      state.gumCalls++;
       state.stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: 'environment' },
@@ -496,12 +518,35 @@
     } catch (err) {
       const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
       showGate(denied
-        ? 'Camera access was blocked. Allow it in Settings → Safari → Camera, or scan a saved photo.'
+        ? 'Camera access was blocked. On iPhone: Settings → Apps → Safari → Camera → Allow, '
+          + 'then reopen this app. Or scan a saved photo instead.'
         : 'Could not start the camera (' + (err && err.name) + '). You can still scan a saved photo.');
       return false;
     }
   }
 
+  /**
+   * Stop delivering frames without giving the camera back. The permission and
+   * the stream survive, so resuming costs nothing and asks nothing.
+   */
+  function pauseCamera() {
+    if (!state.stream) return;
+    state.stream.getVideoTracks().forEach((t) => { t.enabled = false; });
+    el.cam.pause();
+  }
+
+  function resumeCamera() {
+    if (!state.stream) return;
+    state.stream.getVideoTracks().forEach((t) => { t.enabled = true; });
+    if (el.cam.srcObject !== state.stream) el.cam.srcObject = state.stream;
+    el.cam.play().catch(() => {});
+    el.camGate.classList.remove('show');
+  }
+
+  /**
+   * Hand the camera back for good. Only on the way out of the page — anything
+   * shorter than that should pause instead, or iOS asks for permission again.
+   */
   function stopCamera() {
     if (state.stream) {
       state.stream.getTracks().forEach((t) => t.stop());
@@ -718,7 +763,7 @@
     el.guideWrap.hidden = true;
     el.guideHint.textContent = '';
     setOneFinger('select');
-    stopCamera();
+    pauseCamera();
     fitView();
   }
 
@@ -738,7 +783,8 @@
     el.guideHint.textContent = state.live
       ? 'Scanning continuously — tap “live” to stop'
       : 'Fill the box with the price';
-    if (!state.stream) startCamera();
+    if (streamIsLive()) resumeCamera();
+    else startCamera();
   }
 
   /* ---- view transform ------------------------------------------------ *
@@ -1674,11 +1720,15 @@
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         if (state.live) setLive(false);
-        stopCamera();
-      } else if (!state.stream && !el.camGate.classList.contains('show')) {
-        startCamera();
+        // Pause, never stop: iOS treats a fresh getUserMedia as a fresh reason
+        // to ask, and switching apps should not cost you the permission sheet.
+        pauseCamera();
+      } else if (!state.frozen && !el.camGate.classList.contains('show')) {
+        if (streamIsLive()) resumeCamera();
+        else startCamera();
       }
     });
+    // Leaving the page for real is the one time to give the camera back.
     window.addEventListener('pagehide', stopCamera);
 
     keepInputAboveKeyboard();
